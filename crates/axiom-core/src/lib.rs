@@ -11,6 +11,7 @@ mod canonical;
 mod constraint;
 mod expression;
 mod identifier;
+mod infer;
 mod join;
 mod limit;
 mod limits;
@@ -29,6 +30,7 @@ pub use constraint::{
     ConstraintSetError, RowConstraint,
 };
 pub use expression::{Expression, OpaqueId, Predicate};
+pub use infer::{agg_ty, infer as infer_type, infer_value, InferError};
 pub use identifier::{
     AttributeName, AttributeNameError, Pattern, PatternError,
     TableName, TableNameError,
