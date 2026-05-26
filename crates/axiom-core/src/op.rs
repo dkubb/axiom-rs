@@ -391,6 +391,76 @@ impl Op {
         })
     }
 
+    /// Modify the nested relation at a path by applying a sub-`Op`.
+    ///
+    /// V0 supports `path = AnyPath::Lens([Field(name)])` reaching a
+    /// top-level `Type::Relation(sub_in)` attribute. The nested
+    /// column's sub-schema becomes `sub.schema()` in the output;
+    /// callers are responsible for having constructed `sub` against
+    /// the original nested sub-schema (its input).
+    ///
+    /// Deeper paths land once the path-walking schema helper is
+    /// generalised — they raise `UnsupportedPathShape` for now.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnsupportedPathShape` for any path that is not a
+    /// single-field lens, `UnknownAttribute` if the named
+    /// attribute is missing from `input.schema()`, `NotARelation`
+    /// if it does not carry a `Type::Relation` shape, and `Schema`
+    /// if the resulting header violates an invariant.
+    pub fn modify(
+        input: Self,
+        path: AnyPath,
+        sub: Self,
+    ) -> Result<Self, OpError> {
+        use crate::path::PathStep;
+        use crate::schema::{Attribute, Schema};
+        use crate::ty::Type;
+
+        let AnyPath::Lens(lens) = &path else {
+            return Err(OpError::UnsupportedPathShape);
+        };
+        let [PathStep::Field(target)] = lens.steps() else {
+            return Err(OpError::UnsupportedPathShape);
+        };
+
+        let attr_ref = input.schema().find(target).ok_or_else(|| {
+            OpError::UnknownAttribute { attribute: target.clone() }
+        })?;
+        if !matches!(attr_ref.ty, Type::Relation(_)) {
+            return Err(OpError::NotARelation {
+                attribute: target.clone(),
+            });
+        }
+
+        let new_sub_schema = sub.schema().clone();
+        let new_attrs: Vec<Attribute> = input
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| {
+                if &a.name == target {
+                    Attribute {
+                        name: a.name.clone(),
+                        ty: Type::Relation(Box::new(new_sub_schema.clone())),
+                    }
+                } else {
+                    a.clone()
+                }
+            })
+            .collect();
+        let schema = Schema::try_new(new_attrs).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Modify {
+                input: Box::new(input),
+                path,
+                sub: Box::new(sub),
+            },
+            schema,
+        })
+    }
+
     /// Flatten a nested-relation column.
     ///
     /// V0 supports `path = AnyPath::Lens([Field(name)])` reaching a
@@ -1523,6 +1593,83 @@ mod tests {
             LensPath::try_new(vec![PathStep::Field(attr("id"))]).unwrap(),
         );
         let result = Op::unnest(three_attr_source(), path);
+        let Err(OpError::NotARelation { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "id");
+    }
+
+    // ─── Modify. ─────────────────────────────────────────────────
+
+    #[test]
+    fn op_modify_replaces_nested_subschema() {
+        use crate::path::{AnyPath, LensPath, PathStep};
+        let input = nested_source();
+        // Build a sub-Op whose output schema is just `city`. Use a
+        // freshly-constructed source so the test doesn't care
+        // about how the user gets to that schema.
+        let sub = Op::source(Source::Table {
+            schema: Schema::try_new(vec![Attribute {
+                name: attr("city"),
+                ty: Type::String,
+            }])
+            .unwrap(),
+            name: TableName::try_new("inner".to_string()).unwrap(),
+        });
+        let path = AnyPath::Lens(
+            LensPath::try_new(vec![PathStep::Field(attr("profile"))]).unwrap(),
+        );
+        let op = Op::modify(input, path, sub).unwrap();
+        let profile = op.schema().find(&attr("profile")).unwrap();
+        let crate::ty::Type::Relation(sub_schema) = &profile.ty else {
+            unreachable!();
+        };
+        let inner_names: alloc::vec::Vec<_> = sub_schema
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(inner_names, vec!["city"]);
+    }
+
+    #[test]
+    fn op_modify_rejects_unknown_attr() {
+        use super::OpError;
+        use crate::path::{AnyPath, LensPath, PathStep};
+        let sub = Op::source(Source::Table {
+            schema: Schema::try_new(vec![Attribute {
+                name: attr("x"),
+                ty: Type::Int64,
+            }])
+            .unwrap(),
+            name: TableName::try_new("inner".to_string()).unwrap(),
+        });
+        let path = AnyPath::Lens(
+            LensPath::try_new(vec![PathStep::Field(attr("missing"))]).unwrap(),
+        );
+        let result = Op::modify(nested_source(), path, sub);
+        let Err(OpError::UnknownAttribute { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "missing");
+    }
+
+    #[test]
+    fn op_modify_rejects_scalar_target() {
+        use super::OpError;
+        use crate::path::{AnyPath, LensPath, PathStep};
+        let sub = Op::source(Source::Table {
+            schema: Schema::try_new(vec![Attribute {
+                name: attr("x"),
+                ty: Type::Int64,
+            }])
+            .unwrap(),
+            name: TableName::try_new("inner".to_string()).unwrap(),
+        });
+        let path = AnyPath::Lens(
+            LensPath::try_new(vec![PathStep::Field(attr("id"))]).unwrap(),
+        );
+        let result = Op::modify(three_attr_source(), path, sub);
         let Err(OpError::NotARelation { attribute }) = result else {
             unreachable!();
         };
