@@ -289,6 +289,45 @@ mod tests {
     }
 
     #[test]
+    fn memory_source_rejects_nested_array_element_type_mismatch() {
+        use alloc::boxed::Box;
+        use whittle::Refined;
+        // Schema declares position 0 is Array<Int32>; supply a row
+        // whose array element is a String. The walk should descend
+        // into the array and report a RelationField -> ArrayElement
+        // -> Mismatch path.
+        let nested_schema = Schema::try_new(vec![Attribute {
+            name: AttributeName::try_new("tags".to_string()).unwrap(),
+            ty: Type::Array(Box::new(Type::Int32)),
+        }])
+        .unwrap();
+        let bad_value = Value::Array(
+            Refined::try_new(vec![Value::String("oops".to_string())])
+                .unwrap(),
+        );
+        let bad_row = Row::try_new(vec![bad_value]).unwrap();
+        let result =
+            Source::try_memory(nested_schema, vec![bad_row]);
+        let Err(MemorySourceError::RowMismatch {
+            row_index: 0,
+            source:
+                ValueTypeError::RelationField {
+                    position: 0,
+                    source: nested,
+                },
+        }) = result
+        else {
+            unreachable!();
+        };
+        let ValueTypeError::ArrayElement { index: 0, source: leaf } =
+            *nested
+        else {
+            unreachable!();
+        };
+        assert!(matches!(*leaf, ValueTypeError::Mismatch));
+    }
+
+    #[test]
     fn table_source_carries_schema_and_name() {
         let src = Source::Table {
             schema: schema(),
