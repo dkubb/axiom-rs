@@ -198,6 +198,10 @@ pub enum OpError {
         attribute: AttributeName,
     },
 
+    /// `Extend` or `Summarize` failed expression type inference.
+    #[error("type inference: {0}")]
+    Infer(#[source] crate::infer::InferError),
+
     /// `Product` requires the two operands' schemas to be disjoint.
     #[error("attribute `{attribute}` is present in both operands of a product")]
     DuplicateAcrossOperands {
@@ -330,6 +334,94 @@ impl Op {
             },
             schema,
         }
+    }
+
+    /// Extend the input with a new attribute. The expression is
+    /// type-checked against the input schema and the inferred type
+    /// becomes the new attribute's type.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AttributeAlreadyExists` if `name` already exists in
+    /// the input schema, `Infer` if `expr` does not type-check
+    /// against the input schema, and `Schema` if the resulting
+    /// header somehow violates the schema invariants (defence in
+    /// depth — the disjointness check above prevents this in
+    /// practice).
+    pub fn extend(
+        input: Self,
+        name: AttributeName,
+        expr: Expression,
+    ) -> Result<Self, OpError> {
+        use crate::schema::{Attribute, Schema};
+        if input.schema().contains(&name) {
+            return Err(OpError::AttributeAlreadyExists { attribute: name });
+        }
+        let ty = crate::infer::infer(&expr, input.schema())
+            .map_err(OpError::Infer)?;
+        let mut combined: Vec<Attribute> =
+            input.schema().attributes().to_vec();
+        combined.push(Attribute { name: name.clone(), ty });
+        let schema = Schema::try_new(combined).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Extend {
+                input: Box::new(input),
+                name,
+                expr,
+            },
+            schema,
+        })
+    }
+
+    /// Group the input by `by` and compute the named aggregates.
+    ///
+    /// The output schema is the by-attributes (with their input
+    /// types) followed by the aggregates (with their inferred
+    /// types). Output names must be unique across by + aggs.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownAttribute` if a by-attribute is missing,
+    /// `AttributeAlreadyExists` if a by-attribute and an aggregate
+    /// share an output name, `Infer` if an aggregate's input type
+    /// is not admissible, and `Schema` if the constructed header
+    /// somehow fails the invariants.
+    pub fn summarize(
+        input: Self,
+        by: GroupingSet,
+        aggs: NamedAggSet,
+    ) -> Result<Self, OpError> {
+        use crate::schema::{Attribute, Schema};
+        let mut combined: Vec<Attribute> =
+            Vec::with_capacity(by.as_slice().len() + aggs.as_slice().len());
+        for name in by.as_slice() {
+            let attr = input.schema().find(name).ok_or_else(|| {
+                OpError::UnknownAttribute { attribute: name.clone() }
+            })?;
+            combined.push(attr.clone());
+        }
+        for agg in aggs.as_slice() {
+            // Detect by/agg output-name collisions before they
+            // surface as the less-specific Schema duplicate-key
+            // error.
+            if by.as_slice().contains(&agg.name) {
+                return Err(OpError::AttributeAlreadyExists {
+                    attribute: agg.name.clone(),
+                });
+            }
+            let ty = crate::infer::agg_ty(&agg.agg, input.schema())
+                .map_err(OpError::Infer)?;
+            combined.push(Attribute { name: agg.name.clone(), ty });
+        }
+        let schema = Schema::try_new(combined).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Summarize {
+                input: Box::new(input),
+                by,
+                aggs,
+            },
+            schema,
+        })
     }
 
     /// Set union. Output schema = left's; right must share the same
@@ -1009,5 +1101,139 @@ mod tests {
             unreachable!();
         };
         assert_eq!(attribute.as_str(), "name");
+    }
+
+    // ─── Extend. ─────────────────────────────────────────────────
+
+    #[test]
+    fn op_extend_adds_inferred_attribute() {
+        use crate::expression::Expression;
+        use crate::op_enums::BinOp;
+        use crate::ty::Value;
+        let expr = Expression::BinOp(
+            BinOp::Add,
+            alloc::boxed::Box::new(Expression::Attr(attr("id"))),
+            alloc::boxed::Box::new(Expression::Lit(Value::Int64(1))),
+        );
+        let op = Op::extend(two_attr_source(), attr("plus_one"), expr).unwrap();
+        assert_eq!(op.schema().cardinality(), 3);
+        let added = op.schema().find(&attr("plus_one")).unwrap();
+        assert_eq!(added.ty, crate::ty::Type::Int64);
+    }
+
+    #[test]
+    fn op_extend_rejects_existing_name() {
+        use super::OpError;
+        use crate::expression::Expression;
+        use crate::ty::Value;
+        let expr = Expression::Lit(Value::Int64(0));
+        let result = Op::extend(two_attr_source(), attr("id"), expr);
+        let Err(OpError::AttributeAlreadyExists { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "id");
+    }
+
+    #[test]
+    fn op_extend_propagates_infer_error() {
+        use super::OpError;
+        use crate::expression::Expression;
+        // age does not exist on `two_attr_source()` (which has id /
+        // name) → infer reports UnknownAttribute, Op::extend wraps
+        // it in OpError::Infer.
+        let expr = Expression::Attr(attr("age"));
+        let result = Op::extend(two_attr_source(), attr("new"), expr);
+        let Err(OpError::Infer(_)) = result else {
+            unreachable!();
+        };
+    }
+
+    // ─── Summarize. ──────────────────────────────────────────────
+
+    #[test]
+    fn op_summarize_builds_schema_with_by_and_aggs() {
+        let by =
+            GroupingSet::try_new(vec![attr("name")]).unwrap();
+        let aggs = NamedAggSet::try_new(vec![
+            NamedAgg {
+                name: attr("count"),
+                agg: Agg::Count(None),
+            },
+            NamedAgg {
+                name: attr("total"),
+                agg: Agg::Sum(attr("id")),
+            },
+        ])
+        .unwrap();
+        let op = Op::summarize(two_attr_source(), by, aggs).unwrap();
+        let names: alloc::vec::Vec<_> = op
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["name", "count", "total"]);
+        let total = op.schema().find(&attr("total")).unwrap();
+        assert_eq!(total.ty, crate::ty::Type::Int64);
+    }
+
+    #[test]
+    fn op_summarize_admits_empty_by() {
+        let by = GroupingSet::try_new(vec![]).unwrap();
+        let aggs = NamedAggSet::try_new(vec![NamedAgg {
+            name: attr("count"),
+            agg: Agg::Count(None),
+        }])
+        .unwrap();
+        let op = Op::summarize(two_attr_source(), by, aggs).unwrap();
+        assert_eq!(op.schema().cardinality(), 1);
+    }
+
+    #[test]
+    fn op_summarize_rejects_unknown_by_attr() {
+        use super::OpError;
+        let by =
+            GroupingSet::try_new(vec![attr("missing")]).unwrap();
+        let aggs = NamedAggSet::try_new(vec![NamedAgg {
+            name: attr("count"),
+            agg: Agg::Count(None),
+        }])
+        .unwrap();
+        let result = Op::summarize(two_attr_source(), by, aggs);
+        let Err(OpError::UnknownAttribute { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "missing");
+    }
+
+    #[test]
+    fn op_summarize_rejects_agg_name_colliding_with_by() {
+        use super::OpError;
+        let by = GroupingSet::try_new(vec![attr("name")]).unwrap();
+        let aggs = NamedAggSet::try_new(vec![NamedAgg {
+            name: attr("name"),
+            agg: Agg::Count(None),
+        }])
+        .unwrap();
+        let result = Op::summarize(two_attr_source(), by, aggs);
+        let Err(OpError::AttributeAlreadyExists { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "name");
+    }
+
+    #[test]
+    fn op_summarize_propagates_infer_error_for_string_sum() {
+        use super::OpError;
+        let by = GroupingSet::try_new(vec![]).unwrap();
+        let aggs = NamedAggSet::try_new(vec![NamedAgg {
+            name: attr("total_names"),
+            agg: Agg::Sum(attr("name")),
+        }])
+        .unwrap();
+        let result = Op::summarize(two_attr_source(), by, aggs);
+        let Err(OpError::Infer(_)) = result else {
+            unreachable!();
+        };
     }
 }
