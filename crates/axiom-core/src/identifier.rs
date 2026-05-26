@@ -9,6 +9,7 @@
 //! domain-type discipline of whittle's IDEA §4).
 
 use alloc::string::String;
+use core::fmt;
 
 use whittle::primitive::{
     EachChar, IdentChar, LenChars, NonEmpty, StringError,
@@ -39,6 +40,13 @@ type PatternRule = And<NonEmpty, LenChars<1, { MAX_PATTERN_LEN }>>;
 /// `refinement!` macro can express a head/tail split.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributeName(Refined<String, AttributeNameRule>);
+
+impl fmt::Display for AttributeName {
+    #[inline]
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 /// Constructor error for `AttributeName`.
 pub type AttributeNameError = AndError<StringError, StringError>;
