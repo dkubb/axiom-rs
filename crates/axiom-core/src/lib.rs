@@ -8,6 +8,7 @@
 extern crate alloc;
 
 mod canonical;
+mod constraint;
 mod expression;
 mod identifier;
 mod join;
@@ -23,6 +24,10 @@ mod source;
 mod ty;
 
 pub use canonical::{CanonicalPredicate, CanonicalPredicateError};
+pub use constraint::{
+    AttributeConstraint, AttributeConstraintError, ConstraintSet,
+    ConstraintSetError, RowConstraint,
+};
 pub use expression::{Expression, OpaqueId, Predicate};
 pub use identifier::{
     AttributeName, AttributeNameError, Pattern, PatternError,
