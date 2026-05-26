@@ -12,6 +12,7 @@ mod identifier;
 mod join;
 mod limit;
 mod limits;
+mod op;
 mod op_enums;
 mod order;
 mod path;
@@ -26,6 +27,10 @@ pub use identifier::{
     TableName, TableNameError,
 };
 pub use join::{EquiPair, EquiPairs, EquiPairsError, JoinOn};
+pub use op::{
+    AttributeSet, AttributeSetError, GroupingSet, GroupingSetError,
+    NamedAggKey, NamedAggSet, NamedAggSetError, Op,
+};
 pub use limit::{
     BoundedIndex, BoundedIndexError, LimitCount, LimitCountError,
     Offset, OffsetError,
