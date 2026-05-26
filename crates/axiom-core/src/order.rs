@@ -2,16 +2,17 @@
 //! `OrderKeys`.
 //!
 //! `OrderKeys` is the refined carrier — a bounded `Vec<OrderKey>`
-//! whose length is `1..=MAX_SCHEMA_ATTRIBUTES`. Per-attribute
-//! uniqueness will be added when whittle gains a `UniqueByKey`
-//! primitive; for now duplicates are admitted by the type but
-//! callers SHOULD avoid them.
+//! whose length is `1..=MAX_SCHEMA_ATTRIBUTES` and whose attributes
+//! are pairwise distinct (a second key on the same attribute is
+//! always shadowed by the first, so admitting it would represent a
+//! state with no contractual meaning).
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use thiserror::Error;
-use whittle::primitive::{CollectionError, LenItems};
-use whittle::Refined;
+use whittle::primitive::{CollectionError, KeyOf, LenItems, UniqueByKey};
+use whittle::{And, AndError, Refined};
 
 use crate::identifier::AttributeName;
 use crate::limits::MAX_SCHEMA_ATTRIBUTES;
@@ -48,28 +49,49 @@ pub struct OrderKey {
     pub nulls: NullOrder,
 }
 
-/// Bounded list of order keys, `1..=MAX_SCHEMA_ATTRIBUTES` items.
+/// Key extractor for `UniqueByKey<OrderKey, OrderKeyAttrKey>`:
+/// uniqueness is on `attr` only (direction and null placement
+/// don't disambiguate — `[id ASC, id DESC]` is still a redundant
+/// pair of orderings on `id`).
+pub struct OrderKeyAttrKey(PhantomData<()>);
+
+impl KeyOf<OrderKey> for OrderKeyAttrKey {
+    type Key = AttributeName;
+    fn key_of(value: &OrderKey) -> AttributeName {
+        value.attr.clone()
+    }
+}
+
+type OrderKeysRule = And<
+    LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>,
+    UniqueByKey<OrderKey, OrderKeyAttrKey>,
+>;
+
+/// Bounded, attr-unique list of order keys.
 ///
-/// Per-attribute uniqueness (no two keys with the same `attr`) is
-/// not enforced yet: it requires `UniqueByKey<AttributeName>`, which
-/// arrives in a later whittle commit. Until then, `OrderKeys`
-/// admits redundant keys that callers are expected to avoid.
+/// Length is `1..=MAX_SCHEMA_ATTRIBUTES`; `attr` values are
+/// pairwise distinct across the list (a second key on the same
+/// attribute is shadowed and carries no semantics).
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OrderKeys(
-    Refined<Vec<OrderKey>, LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>>,
-);
+pub struct OrderKeys(Refined<Vec<OrderKey>, OrderKeysRule>);
 
 /// Constructor error for `OrderKeys`.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum OrderKeysError {
-    /// Underlying length-bound rejection from whittle.
+    /// Length bound failed (empty list or over-length).
     #[error("{0}")]
     Length(#[source] CollectionError),
+    /// Two keys reference the same attribute.
+    #[error("{0}")]
+    DuplicateAttribute(#[source] CollectionError),
 }
 
-impl From<CollectionError> for OrderKeysError {
-    fn from(err: CollectionError) -> Self {
-        Self::Length(err)
+impl From<AndError<CollectionError, CollectionError>> for OrderKeysError {
+    fn from(err: AndError<CollectionError, CollectionError>) -> Self {
+        match err {
+            AndError::Left(inner) => Self::Length(inner),
+            AndError::Right(inner) => Self::DuplicateAttribute(inner),
+        }
     }
 }
 
@@ -79,7 +101,9 @@ impl OrderKeys {
     /// # Errors
     ///
     /// Returns `OrderKeysError::Length` when `raw` is empty or
-    /// exceeds `MAX_SCHEMA_ATTRIBUTES` keys.
+    /// exceeds `MAX_SCHEMA_ATTRIBUTES`, and
+    /// `OrderKeysError::DuplicateAttribute` when two keys reference
+    /// the same attribute.
     #[inline]
     pub fn try_new(raw: Vec<OrderKey>) -> Result<Self, OrderKeysError> {
         Refined::try_new(raw).map(Self).map_err(Into::into)
@@ -136,5 +160,17 @@ mod tests {
         }
         let result = OrderKeys::try_new(raw);
         assert!(matches!(result.unwrap_err(), OrderKeysError::Length(_)));
+    }
+
+    #[test]
+    fn duplicate_attribute_rejected() {
+        let result = OrderKeys::try_new(vec![
+            key("id", Direction::Ascending),
+            key("id", Direction::Descending),
+        ]);
+        assert!(matches!(
+            result.unwrap_err(),
+            OrderKeysError::DuplicateAttribute(_),
+        ));
     }
 }
