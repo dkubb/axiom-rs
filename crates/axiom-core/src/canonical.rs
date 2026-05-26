@@ -1,34 +1,43 @@
-//! `CanonicalPredicate`: an `Expression` narrowed to canonical form
-//! suitable for use as a constraint.
+//! `CanonicalPredicate`: a `BoolExpression` narrowed to canonical
+//! form suitable for use as a constraint.
 //!
 //! The full canonicalisation pipeline (constant folding, De Morgan,
-//! commutative-operand sorting, …) lands incrementally. The v0
-//! invariant is the only one that's load-bearing for constraints:
-//! an `Expression::Agg` is not admissible as a constraint because
-//! aggregates can only appear inside `Summarize`.
+//! commutative-operand sorting, …) lands incrementally. V0 enforces
+//! the two contract invariants that are load-bearing today:
+//! - Bool-typed against the input schema (via `BoolExpression`).
+//! - No `Expression::Agg` anywhere in the tree — aggregates are
+//!   admissible only inside `Summarize`.
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use thiserror::Error;
 
-use crate::expression::Expression;
+use crate::expression::{BoolExpression, Expression};
 use crate::identifier::AttributeName;
+use crate::infer::InferError;
+use crate::schema::Schema;
 
 /// Boolean expression narrowed to canonical form.
 ///
-/// Construction goes through `try_from_expression`. The inner
-/// `Expression` is private so the only path to a `CanonicalPredicate`
-/// is through the narrowing morphism.
+/// Construction goes through `try_new(schema, expr)`: the
+/// `BoolExpression` proof carries Bool-typing against the schema;
+/// `CanonicalPredicate` adds the aggregate-free constraint on top.
+/// The inner expression is private so a `CanonicalPredicate` cannot
+/// be fabricated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CanonicalPredicate {
-    inner: Expression,
+    inner: BoolExpression,
 }
 
 /// Construction error for `CanonicalPredicate`.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CanonicalPredicateError {
+    /// Expression failed Bool-typing against the schema.
+    #[error("{0}")]
+    Infer(#[source] InferError),
+
     /// Expression contained an aggregate. Aggregates may only
     /// appear inside `Summarize`, not in a predicate or constraint.
     #[error("aggregate not admissible inside a canonical predicate")]
@@ -36,27 +45,36 @@ pub enum CanonicalPredicateError {
 }
 
 impl CanonicalPredicate {
-    /// Narrow `expr` into a canonical predicate.
+    /// Narrow `expr` into a canonical predicate against `schema`.
     ///
     /// # Errors
     ///
-    /// Returns `CanonicalPredicateError::ContainsAggregate` when
-    /// `expr` (or any sub-expression) contains an `Agg` variant.
-    #[inline]
-    pub fn try_from_expression(
+    /// Returns `Infer` if the expression fails Bool-typing, and
+    /// `ContainsAggregate` if it contains an `Agg` sub-expression.
+    pub fn try_new(
+        schema: &Schema,
         expr: Expression,
     ) -> Result<Self, CanonicalPredicateError> {
         if contains_aggregate(&expr) {
             return Err(CanonicalPredicateError::ContainsAggregate);
         }
-        Ok(Self { inner: expr })
+        let inner = BoolExpression::try_new(schema, expr)
+            .map_err(CanonicalPredicateError::Infer)?;
+        Ok(Self { inner })
     }
 
-    /// Borrow the underlying expression.
+    /// Borrow the underlying Bool-typed expression.
+    #[must_use]
+    #[inline]
+    pub const fn as_bool_expression(&self) -> &BoolExpression {
+        &self.inner
+    }
+
+    /// Borrow the underlying raw expression for matching.
     #[must_use]
     #[inline]
     pub const fn as_expression(&self) -> &Expression {
-        &self.inner
+        self.inner.as_expression()
     }
 
     /// Collect every attribute referenced (directly or transitively)
@@ -64,7 +82,7 @@ impl CanonicalPredicate {
     #[must_use]
     pub fn free_attributes(&self) -> BTreeSet<AttributeName> {
         let mut out = BTreeSet::new();
-        free_attrs_into(&self.inner, &mut out);
+        free_attrs_into(self.inner.as_expression(), &mut out);
         out
     }
 }
@@ -135,19 +153,34 @@ mod tests {
     use alloc::boxed::Box;
     use alloc::string::ToString;
 
+    use alloc::vec;
+
     use super::{CanonicalPredicate, CanonicalPredicateError};
     use crate::expression::Expression;
     use crate::identifier::AttributeName;
+    use crate::infer::InferError;
     use crate::op_enums::{Agg, BinOp};
-    use crate::ty::Value;
+    use crate::schema::{Attribute, Schema};
+    use crate::ty::{Type, Value};
 
     fn attr(name: &str) -> AttributeName {
         AttributeName::try_new(name.to_string()).unwrap()
     }
 
+    fn person_schema() -> Schema {
+        Schema::try_new(vec![
+            Attribute { name: attr("age"), ty: Type::Int32 },
+            Attribute { name: attr("retire_at"), ty: Type::Int32 },
+            Attribute { name: attr("amount"), ty: Type::Int32 },
+            Attribute { name: attr("x"), ty: Type::Int32 },
+        ])
+        .unwrap()
+    }
+
     #[test]
     fn literal_predicate_admissible() {
-        let p = CanonicalPredicate::try_from_expression(
+        let p = CanonicalPredicate::try_new(
+            &person_schema(),
             Expression::Lit(Value::Bool(true)),
         )
         .unwrap();
@@ -163,13 +196,28 @@ mod tests {
             Box::new(Expression::Attr(attr("age"))),
             Box::new(Expression::Lit(Value::Int32(18))),
         );
-        CanonicalPredicate::try_from_expression(expr).unwrap();
+        CanonicalPredicate::try_new(&person_schema(), expr).unwrap();
+    }
+
+    #[test]
+    fn non_bool_expression_rejected() {
+        let result = CanonicalPredicate::try_new(
+            &person_schema(),
+            Expression::Lit(Value::Int32(0)),
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            CanonicalPredicateError::Infer(InferError::TypeMismatch {
+                expected: Type::Bool,
+                got: Type::Int32,
+            }),
+        ));
     }
 
     #[test]
     fn aggregate_predicate_rejected() {
         let expr = Expression::Agg(Agg::Sum(attr("amount")));
-        let result = CanonicalPredicate::try_from_expression(expr);
+        let result = CanonicalPredicate::try_new(&person_schema(), expr);
         assert_eq!(
             result.unwrap_err(),
             CanonicalPredicateError::ContainsAggregate,
@@ -183,7 +231,7 @@ mod tests {
             Box::new(Expression::Agg(Agg::Sum(attr("x")))),
             Box::new(Expression::Lit(Value::Int32(0))),
         );
-        let result = CanonicalPredicate::try_from_expression(expr);
+        let result = CanonicalPredicate::try_new(&person_schema(), expr);
         assert_eq!(
             result.unwrap_err(),
             CanonicalPredicateError::ContainsAggregate,
@@ -205,7 +253,7 @@ mod tests {
                 Box::new(Expression::Attr(attr("retire_at"))),
             )),
         );
-        let p = CanonicalPredicate::try_from_expression(expr).unwrap();
+        let p = CanonicalPredicate::try_new(&person_schema(), expr).unwrap();
         let attrs = p.free_attributes();
         assert_eq!(attrs.len(), 2);
         assert!(attrs.contains(&attr("age")));

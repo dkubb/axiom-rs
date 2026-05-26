@@ -9,10 +9,13 @@
 //! predicate push-down, join planning, and pruning.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use thiserror::Error;
-use whittle::primitive::{CollectionError, LenItems};
-use whittle::Refined;
+use whittle::primitive::{
+    CollectionError, KeyOf, LenItems, UniqueByKey,
+};
+use whittle::{And, AndError, Refined};
 
 use crate::canonical::CanonicalPredicate;
 use crate::identifier::AttributeName;
@@ -21,9 +24,10 @@ use crate::limits::MAX_SCHEMA_ATTRIBUTES;
 /// A constraint over a single attribute: `predicate` must hold for
 /// the value of `attr` on every admissible row.
 ///
-/// Invariant: `predicate.free_attributes()` is either empty (a
-/// constant predicate) or equal to `{attr}`. References to any
-/// other attribute are rejected at construction.
+/// Invariant: `predicate.free_attributes() == {attr}` — exactly the
+/// scoped attribute, no more, no less. Constant predicates (empty
+/// free set) belong in a row-level constraint or should be folded
+/// away; foreign references mean the constraint is mis-scoped.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttributeConstraint {
     attr: AttributeName,
@@ -42,25 +46,52 @@ pub enum AttributeConstraintError {
         /// The first attribute name that escaped the scope.
         foreign: AttributeName,
     },
+    /// Predicate references no attributes — it's a constant
+    /// predicate and does not belong on a per-attribute scope.
+    #[error("attribute constraint on `{scope}` has constant predicate (no free attributes)")]
+    ConstantPredicate {
+        /// The attribute the constant predicate was supposed to scope.
+        scope: AttributeName,
+    },
+    /// Predicate does not reference the scoped attribute.
+    #[error("attribute constraint on `{scope}` does not reference its own attribute")]
+    MissingScope {
+        /// The attribute the constraint was supposed to scope.
+        scope: AttributeName,
+    },
 }
 
 impl AttributeConstraint {
-    /// Build a per-attribute constraint, enforcing the
-    /// `free_attrs ⊆ {attr}` invariant.
+    /// Build a per-attribute constraint, enforcing
+    /// `predicate.free_attributes() == {attr}`.
     ///
     /// # Errors
     ///
-    /// Returns `ForeignAttribute` if the predicate references any
-    /// attribute other than `attr`.
+    /// - `ForeignAttribute` if the predicate references any
+    ///   attribute other than `attr`.
+    /// - `MissingScope` if the predicate does not reference `attr`.
+    /// - `ConstantPredicate` if the predicate references no
+    ///   attributes at all.
     pub fn try_new(
         attr: AttributeName,
         predicate: CanonicalPredicate,
     ) -> Result<Self, AttributeConstraintError> {
-        for free in predicate.free_attributes() {
-            if free != attr {
+        let free = predicate.free_attributes();
+        if free.is_empty() {
+            return Err(AttributeConstraintError::ConstantPredicate {
+                scope: attr,
+            });
+        }
+        if !free.contains(&attr) {
+            return Err(AttributeConstraintError::MissingScope {
+                scope: attr,
+            });
+        }
+        for name in &free {
+            if name != &attr {
                 return Err(AttributeConstraintError::ForeignAttribute {
                     scope: attr,
-                    foreign: free,
+                    foreign: name.clone(),
                 });
             }
         }
@@ -106,10 +137,29 @@ impl RowConstraint {
     }
 }
 
+/// Key extractor: per-attribute constraint uniqueness is on the
+/// scoped attribute name. Two `AttributeConstraint`s on the same
+/// attribute are redundant — a future commit will conjoin them
+/// into a single `CanonicalPredicate` for that attribute, but
+/// admitting two distinct entries is a state with no contractual
+/// meaning today.
+pub struct AttributeConstraintAttr(PhantomData<()>);
+
+impl KeyOf<AttributeConstraint> for AttributeConstraintAttr {
+    type Key = AttributeName;
+    fn key_of(value: &AttributeConstraint) -> AttributeName {
+        value.attr.clone()
+    }
+}
+
 // Bounded by `MAX_SCHEMA_ATTRIBUTES` for symmetry with the schema —
-// no relation can practically need more constraints than it has
-// columns by orders of magnitude.
-type AttrConstraintsRule = LenItems<0, { MAX_SCHEMA_ATTRIBUTES }>;
+// no relation can practically need more per-attribute constraints
+// than it has columns. Per-attribute uniqueness on the scoped
+// attribute name closes the duplicate-entry state.
+type AttrConstraintsRule = And<
+    LenItems<0, { MAX_SCHEMA_ATTRIBUTES }>,
+    UniqueByKey<AttributeConstraint, AttributeConstraintAttr>,
+>;
 type RowConstraintsRule = LenItems<0, { MAX_SCHEMA_ATTRIBUTES }>;
 
 /// Set of constraints attached to a relation.
@@ -129,12 +179,26 @@ pub struct ConstraintSet {
 #[non_exhaustive]
 pub enum ConstraintSetError {
     /// Per-attribute constraint vector violated its length bound.
-    #[error("per-attribute constraint list: {0}")]
-    PerAttribute(#[source] CollectionError),
+    #[error("per-attribute constraint list: length: {0}")]
+    PerAttributeLength(#[source] CollectionError),
+
+    /// Per-attribute constraint vector contains two entries on the
+    /// same attribute.
+    #[error("per-attribute constraint list: duplicate: {0}")]
+    PerAttributeDuplicate(#[source] CollectionError),
 
     /// Per-row constraint vector violated its length bound.
     #[error("per-row constraint list: {0}")]
     PerRow(#[source] CollectionError),
+}
+
+impl From<AndError<CollectionError, CollectionError>> for ConstraintSetError {
+    fn from(err: AndError<CollectionError, CollectionError>) -> Self {
+        match err {
+            AndError::Left(inner) => Self::PerAttributeLength(inner),
+            AndError::Right(inner) => Self::PerAttributeDuplicate(inner),
+        }
+    }
 }
 
 impl ConstraintSet {
@@ -142,14 +206,14 @@ impl ConstraintSet {
     ///
     /// # Errors
     ///
-    /// Returns `PerAttribute` / `PerRow` if either vector exceeds
-    /// the length bound.
+    /// Returns `PerAttributeLength` or `PerRow` for length bound
+    /// violations, and `PerAttributeDuplicate` if two
+    /// per-attribute constraints scope the same attribute.
     pub fn try_new(
         per_attr: Vec<AttributeConstraint>,
         per_row: Vec<RowConstraint>,
     ) -> Result<Self, ConstraintSetError> {
-        let per_attr = Refined::try_new(per_attr)
-            .map_err(ConstraintSetError::PerAttribute)?;
+        let per_attr = Refined::try_new(per_attr)?;
         let per_row = Refined::try_new(per_row)
             .map_err(ConstraintSetError::PerRow)?;
         Ok(Self { per_attr, per_row })
@@ -194,33 +258,48 @@ mod tests {
 
     use super::{
         AttributeConstraint, AttributeConstraintError, ConstraintSet,
-        RowConstraint,
+        ConstraintSetError, RowConstraint,
     };
     use crate::canonical::CanonicalPredicate;
     use crate::expression::Expression;
     use crate::identifier::AttributeName;
     use crate::op_enums::BinOp;
-    use crate::ty::Value;
+    use crate::schema::{Attribute, Schema};
+    use crate::ty::{Type, Value};
 
     fn attr(name: &str) -> AttributeName {
         AttributeName::try_new(name.to_string()).unwrap()
     }
 
+    fn person_schema() -> Schema {
+        Schema::try_new(vec![
+            Attribute { name: attr("age"), ty: Type::Int32 },
+            Attribute { name: attr("retire_at"), ty: Type::Int32 },
+        ])
+        .unwrap()
+    }
+
     fn pred_age_ge_18() -> CanonicalPredicate {
-        CanonicalPredicate::try_from_expression(Expression::BinOp(
-            BinOp::Ge,
-            Box::new(Expression::Attr(attr("age"))),
-            Box::new(Expression::Lit(Value::Int32(18))),
-        ))
+        CanonicalPredicate::try_new(
+            &person_schema(),
+            Expression::BinOp(
+                BinOp::Ge,
+                Box::new(Expression::Attr(attr("age"))),
+                Box::new(Expression::Lit(Value::Int32(18))),
+            ),
+        )
         .unwrap()
     }
 
     fn pred_age_lt_retire() -> CanonicalPredicate {
-        CanonicalPredicate::try_from_expression(Expression::BinOp(
-            BinOp::Lt,
-            Box::new(Expression::Attr(attr("age"))),
-            Box::new(Expression::Attr(attr("retire_at"))),
-        ))
+        CanonicalPredicate::try_new(
+            &person_schema(),
+            Expression::BinOp(
+                BinOp::Lt,
+                Box::new(Expression::Attr(attr("age"))),
+                Box::new(Expression::Attr(attr("retire_at"))),
+            ),
+        )
         .unwrap()
     }
 
@@ -244,12 +323,36 @@ mod tests {
     }
 
     #[test]
-    fn attribute_constraint_accepts_constant_predicate() {
-        let pred = CanonicalPredicate::try_from_expression(
+    fn attribute_constraint_rejects_constant_predicate() {
+        let pred = CanonicalPredicate::try_new(
+            &person_schema(),
             Expression::Lit(Value::Bool(true)),
         )
         .unwrap();
-        AttributeConstraint::try_new(attr("age"), pred).unwrap();
+        let result = AttributeConstraint::try_new(attr("age"), pred);
+        assert!(matches!(
+            result.unwrap_err(),
+            AttributeConstraintError::ConstantPredicate { .. },
+        ));
+    }
+
+    #[test]
+    fn attribute_constraint_rejects_missing_scope() {
+        // Predicate references retire_at only; scope is age.
+        let pred = CanonicalPredicate::try_new(
+            &person_schema(),
+            Expression::BinOp(
+                BinOp::Lt,
+                Box::new(Expression::Attr(attr("retire_at"))),
+                Box::new(Expression::Lit(Value::Int32(65))),
+            ),
+        )
+        .unwrap();
+        let result = AttributeConstraint::try_new(attr("age"), pred);
+        assert!(matches!(
+            result.unwrap_err(),
+            AttributeConstraintError::MissingScope { .. },
+        ));
     }
 
     #[test]
@@ -281,5 +384,24 @@ mod tests {
         assert!(!cs.is_empty());
         assert_eq!(cs.per_attribute().len(), 1);
         assert_eq!(cs.per_row().len(), 1);
+    }
+
+    #[test]
+    fn constraint_set_rejects_duplicate_attribute_constraints() {
+        let c1 = AttributeConstraint::try_new(
+            attr("age"),
+            pred_age_ge_18(),
+        )
+        .unwrap();
+        let c2 = AttributeConstraint::try_new(
+            attr("age"),
+            pred_age_ge_18(),
+        )
+        .unwrap();
+        let result = ConstraintSet::try_new(vec![c1, c2], vec![]);
+        assert!(matches!(
+            result.unwrap_err(),
+            ConstraintSetError::PerAttributeDuplicate(_),
+        ));
     }
 }
