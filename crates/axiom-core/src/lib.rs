@@ -29,7 +29,7 @@ pub use constraint::{
     AttributeConstraint, AttributeConstraintError, ConstraintSet,
     ConstraintSetError, RowConstraint,
 };
-pub use expression::{Expression, OpaqueId, Predicate};
+pub use expression::{Expression, InListValues, OpaqueId, Predicate};
 pub use infer::{agg_ty, infer as infer_type, infer_value, InferError};
 pub use identifier::{
     AttributeName, AttributeNameError, Pattern, PatternError,
@@ -45,9 +45,10 @@ pub use limit::{
     Offset, OffsetError,
 };
 pub use limits::{
-    MAX_ATTRIBUTE_NAME_LEN, MAX_LIMIT_COUNT, MAX_OFFSET,
-    MAX_PATH_INDEX, MAX_PATH_STEPS, MAX_PATTERN_LEN,
-    MAX_SCHEMA_ATTRIBUTES, MAX_TABLE_NAME_LEN,
+    MAX_ARRAY_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_IN_LIST,
+    MAX_LIMIT_COUNT, MAX_OFFSET, MAX_PATH_INDEX, MAX_PATH_STEPS,
+    MAX_PATTERN_LEN, MAX_ROWS_IN_AST, MAX_SCHEMA_ATTRIBUTES,
+    MAX_TABLE_NAME_LEN,
 };
 pub use op_enums::{Agg, BinOp, JoinKind, NamedAgg, UnOp};
 pub use order::{

@@ -1,13 +1,19 @@
 //! Attribute type system: `Type` and the `Value` companion.
 //!
-//! Both are closed sums whose state space is already minimised by
-//! the Rust enum: no refinement is needed beyond the type-level
-//! discipline. They live here so other modules (`Attribute`,
-//! `Schema`, `Expression`) can reference them.
+//! `Type` is a closed sum already minimised by the Rust enum.
+//! `Value` carries refined inner types so its representable
+//! state space matches the admissible value space variant by
+//! variant: `Float64` rejects NaN and the infinities, nested
+//! collection variants enforce length bounds, and so on.
 
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use whittle::primitive::{Finite, LenItems};
+use whittle::Refined;
+
+use crate::limits::{MAX_ARRAY_LEN, MAX_ROWS_IN_AST};
 
 /// Attribute type. The NF² extensions (`Relation`, `Array`,
 /// `Optional`) are recursive variants over `Schema` and `Type`.
@@ -56,10 +62,11 @@ pub enum Value {
     Int32(i32),
     /// `Type::Int64`.
     Int64(i64),
-    /// `Type::Float64`. Stored as bits to keep `PartialEq` honest
-    /// (NaN is intentionally not equal to itself; refined floats
-    /// can use `NotNan` to forbid the case).
-    Float64(f64),
+    /// `Type::Float64`. Refined to `Finite` — neither NaN nor
+    /// `±INF` is admissible because both break `PartialEq`
+    /// reflexivity (NaN) or well-definedness of arithmetic
+    /// aggregates (`±INF`).
+    Float64(Refined<f64, Finite>),
     /// `Type::Decimal`. Canonical string form pending the
     /// `rust_decimal` feature.
     Decimal(crate::identifier::Pattern),
@@ -71,10 +78,11 @@ pub enum Value {
     DateTime(crate::identifier::Pattern),
     /// `Type::Json`. Raw JSON text pending a real JSON wrapper.
     Json(crate::identifier::Pattern),
-    /// Nested relation row collection.
-    Relation(Vec<crate::row::Row>),
-    /// NF² array.
-    Array(Vec<Self>),
+    /// Nested relation row collection, bounded by
+    /// `MAX_ROWS_IN_AST`.
+    Relation(Refined<Vec<crate::row::Row>, LenItems<0, { MAX_ROWS_IN_AST }>>),
+    /// NF² array, bounded by `MAX_ARRAY_LEN`.
+    Array(Refined<Vec<Self>, LenItems<0, { MAX_ARRAY_LEN }>>),
     /// `Type::Optional`.
     Optional(Option<Box<Self>>),
 }

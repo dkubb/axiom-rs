@@ -12,15 +12,15 @@ use whittle::primitive::{CollectionError, LenItems};
 use whittle::Refined;
 
 use crate::identifier::TableName;
-use crate::limits::MAX_SCHEMA_ATTRIBUTES;
+use crate::limits::MAX_ROWS_IN_AST;
 use crate::row::Row;
 use crate::schema::Schema;
 
 // Schema-validated rows are simply a length-bounded `Vec<Row>` for
 // now. Per-row value-type checking against the schema lands once
-// the `Type`/`Value` matcher is implemented; the structural bound
-// is already enforced by whittle.
-type SourceRowsRule = LenItems<0, { MAX_SCHEMA_ATTRIBUTES }>;
+// the schema-aware Source::try_memory constructor is wired in; the
+// structural bound is already enforced by whittle.
+type SourceRowsRule = LenItems<0, { MAX_ROWS_IN_AST }>;
 
 /// Length-bounded list of `Row`s, the inline data for a memory source.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,8 +35,8 @@ impl Rows {
     /// # Errors
     ///
     /// Returns `CollectionError::LenOutOfRange` when `raw` exceeds
-    /// `MAX_SCHEMA_ATTRIBUTES` rows. (Lower bound is `0` so the
-    /// empty relation is admissible.)
+    /// `MAX_ROWS_IN_AST` rows. (Lower bound is `0` so the empty
+    /// relation is admissible.)
     #[inline]
     pub fn try_new(raw: Vec<Row>) -> Result<Self, RowsError> {
         Refined::try_new(raw).map(Self)
@@ -111,7 +111,7 @@ mod tests {
 
     use super::{Rows, Source};
     use crate::identifier::{AttributeName, TableName};
-    use crate::limits::MAX_SCHEMA_ATTRIBUTES;
+    use crate::limits::MAX_ROWS_IN_AST;
     use crate::row::Row;
     use crate::schema::{Attribute, Schema};
     use crate::ty::{Type, Value};
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn overlength_rows_rejected() {
         let row = Row::try_new(vec![Value::Int64(1)]).unwrap();
-        let too_many: Vec<Row> = (0..=MAX_SCHEMA_ATTRIBUTES)
+        let too_many: Vec<Row> = (0..=MAX_ROWS_IN_AST)
             .map(|_| row.clone())
             .collect();
         let result = Rows::try_new(too_many);

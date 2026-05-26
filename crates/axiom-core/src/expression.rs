@@ -13,9 +13,16 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+use whittle::primitive::LenItems;
+use whittle::Refined;
+
 use crate::identifier::{AttributeName, Pattern};
+use crate::limits::MAX_IN_LIST;
 use crate::op_enums::{Agg, BinOp, UnOp};
 use crate::ty::{Type, Value};
+
+/// Length-bounded list of literals for `Expression::InList`.
+pub type InListValues = Refined<Vec<Value>, LenItems<1, { MAX_IN_LIST }>>;
 
 /// Boolean-or-other-typed expression. Refinement to `Type::Bool` is
 /// the job of `Predicate`'s constructor; this enum is the
@@ -33,8 +40,11 @@ pub enum Expression {
     UnOp(UnOp, Box<Self>),
     /// `lhs LIKE pattern`.
     Like(Box<Self>, Pattern),
-    /// `expr IN (literals...)`.
-    InList(Box<Self>, Vec<Value>),
+    /// `expr IN (literals...)`. Length-bounded by `MAX_IN_LIST`;
+    /// empty IN-lists are unrepresentable (an empty IN is always
+    /// `false`, which the optimiser produces by constant folding
+    /// rather than carrying as a degenerate state).
+    InList(Box<Self>, InListValues),
     /// `expr IS NULL`.
     IsNull(Box<Self>),
     /// `CAST(expr AS ty)`.

@@ -116,7 +116,7 @@ pub fn infer(
         }
         Expression::InList(operand, values) => {
             let ot = infer(operand, schema)?;
-            for (index, v) in values.iter().enumerate() {
+            for (index, v) in values.as_inner().iter().enumerate() {
                 let vt = infer_value(v)?;
                 if vt != ot {
                     return Err(InferError::InListElementMismatch {
@@ -488,12 +488,19 @@ mod tests {
         assert_eq!(infer(&expr, &s).unwrap(), Type::Int64);
     }
 
+    fn in_list(
+        values: alloc::vec::Vec<Value>,
+    ) -> crate::expression::InListValues {
+        use whittle::Refined;
+        Refined::try_new(values).unwrap()
+    }
+
     #[test]
     fn in_list_returns_bool_when_elements_match() {
         let s = two_attr_schema();
         let expr = Expression::InList(
             Box::new(Expression::Attr(attr("age"))),
-            vec![Value::Int32(1), Value::Int32(2)],
+            in_list(vec![Value::Int32(1), Value::Int32(2)]),
         );
         assert_eq!(infer(&expr, &s).unwrap(), Type::Bool);
     }
@@ -503,7 +510,7 @@ mod tests {
         let s = two_attr_schema();
         let expr = Expression::InList(
             Box::new(Expression::Attr(attr("age"))),
-            vec![Value::Int32(1), Value::String("x".to_string())],
+            in_list(vec![Value::Int32(1), Value::String("x".to_string())]),
         );
         assert!(matches!(
             infer(&expr, &s).unwrap_err(),

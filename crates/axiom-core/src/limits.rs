@@ -30,3 +30,15 @@ pub const MAX_PATH_INDEX: usize = 65536;
 
 /// Upper bound on the number of steps in a single `Path`.
 pub const MAX_PATH_STEPS: usize = 32;
+
+/// Upper bound on rows embedded in a `Source::Memory` or a nested
+/// `Value::Relation`. Matches the architecture spec
+/// (`MAX_ROWS_IN_AST`).
+pub const MAX_ROWS_IN_AST: usize = 16384;
+
+/// Upper bound on `Vec<Value>` literals embedded in an
+/// `Expression::InList`.
+pub const MAX_IN_LIST: usize = 1024;
+
+/// Upper bound on `Value::Array` element count.
+pub const MAX_ARRAY_LEN: usize = MAX_IN_LIST;
