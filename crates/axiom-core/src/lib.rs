@@ -9,6 +9,7 @@ extern crate alloc;
 
 mod expression;
 mod identifier;
+mod join;
 mod limit;
 mod limits;
 mod op_enums;
@@ -16,6 +17,7 @@ mod order;
 mod path;
 mod row;
 mod schema;
+mod source;
 mod ty;
 
 pub use expression::{Expression, OpaqueId, Predicate};
@@ -23,6 +25,7 @@ pub use identifier::{
     AttributeName, AttributeNameError, Pattern, PatternError,
     TableName, TableNameError,
 };
+pub use join::{EquiPair, EquiPairs, EquiPairsError, JoinOn};
 pub use limit::{
     BoundedIndex, BoundedIndexError, LimitCount, LimitCountError,
     Offset, OffsetError,
@@ -45,4 +48,5 @@ pub use schema::{
     Attribute, AttributeKey, Schema, SchemaCardinality,
     SchemaCardinalityError, SchemaError,
 };
+pub use source::{Rows, RowsError, Source};
 pub use ty::{Type, Value};
