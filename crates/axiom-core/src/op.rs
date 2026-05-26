@@ -273,16 +273,43 @@ impl Op {
 
     /// Restrict the input's rows by a `Predicate`. The output schema
     /// is identical to the input's.
-    #[must_use]
-    pub fn restrict(input: Self, predicate: Predicate) -> Self {
+    ///
+    /// For `Predicate::Expr`, the wrapped expression is type-checked
+    /// against `input.schema()` and must infer to `Type::Bool`.
+    /// `Predicate::Opaque` carries no static expression, so no type
+    /// check applies.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Infer` if the predicate expression fails inference
+    /// (unknown attribute, mismatched operator types) or does not
+    /// produce a `Type::Bool` result.
+    pub fn restrict(
+        input: Self,
+        predicate: Predicate,
+    ) -> Result<Self, OpError> {
+        use crate::ty::Type;
+
+        if let Predicate::Expr(ref expr) = predicate {
+            let ty = crate::infer::infer(expr, input.schema())
+                .map_err(OpError::Infer)?;
+            if ty != Type::Bool {
+                return Err(OpError::Infer(
+                    crate::infer::InferError::TypeMismatch {
+                        expected: Type::Bool,
+                        got: ty,
+                    },
+                ));
+            }
+        }
         let schema = input.schema().clone();
-        Self {
+        Ok(Self {
             kind: OpKind::Restrict {
                 input: Box::new(input),
                 predicate,
             },
             schema,
-        }
+        })
     }
 
     /// Rename `from` to `to`, preserving order and types.
@@ -1085,8 +1112,39 @@ mod tests {
             alloc::boxed::Box::new(Expression::Attr(attr("id"))),
             alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
         ));
-        let op = Op::restrict(input, predicate);
+        let op = Op::restrict(input, predicate).unwrap();
         assert_eq!(op.schema().cardinality(), 2);
+    }
+
+    #[test]
+    fn op_restrict_rejects_non_bool_predicate() {
+        use super::OpError;
+        use crate::expression::{Expression, Predicate};
+        use crate::ty::Value;
+        // Lit Int32(0) is not Bool-typed.
+        let predicate = Predicate::Expr(Expression::Lit(Value::Int32(0)));
+        let result = Op::restrict(two_attr_source(), predicate);
+        let Err(OpError::Infer(_)) = result else {
+            unreachable!();
+        };
+    }
+
+    #[test]
+    fn op_restrict_rejects_unknown_attr_in_predicate() {
+        use super::OpError;
+        use crate::expression::{Expression, Predicate};
+        use crate::op_enums::BinOp;
+        use crate::ty::Value;
+        // `age` is not in two_attr_source (which has id / name).
+        let predicate = Predicate::Expr(Expression::BinOp(
+            BinOp::Gt,
+            alloc::boxed::Box::new(Expression::Attr(attr("age"))),
+            alloc::boxed::Box::new(Expression::Lit(Value::Int32(0))),
+        ));
+        let result = Op::restrict(two_attr_source(), predicate);
+        let Err(OpError::Infer(_)) = result else {
+            unreachable!();
+        };
     }
 
     #[test]
