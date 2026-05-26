@@ -802,11 +802,17 @@ impl Op {
                         shared.push(l.name.clone());
                     }
                 }
-                if shared.is_empty() {
-                    // Natural join over disjoint schemas IS a
-                    // Cartesian product. Normalise to the canonical
-                    // operator instead of carrying a degenerate
-                    // Natural state through the AST.
+                if shared.is_empty()
+                    && matches!(kind, JoinKind::Inner)
+                {
+                    // Natural INNER join over disjoint schemas IS
+                    // a Cartesian product; normalise. Outer-join
+                    // kinds (LeftOuter / RightOuter / FullOuter)
+                    // do NOT collapse this way — with an empty
+                    // opposite input they still emit padded rows,
+                    // which product would drop. Keep the Natural
+                    // shape for those kinds so the outerness is
+                    // preserved.
                     return Self::product(left, right);
                 }
                 let mut combined: Vec<Attribute> =
@@ -1440,28 +1446,58 @@ mod tests {
         assert_eq!(attribute.as_str(), "name");
     }
 
-    #[test]
-    fn op_join_natural_with_no_shared_attrs_normalises_to_product() {
-        // left.schema = (id, name); right.schema = (city) — no
-        // shared names. Per the architecture spec, this collapses
-        // to a Cartesian product.
-        let right = Op::source(Source::Table {
+    fn disjoint_right_source() -> Op {
+        Op::source(Source::Table {
             schema: Schema::try_new(vec![Attribute {
                 name: attr("city"),
                 ty: Type::String,
             }])
             .unwrap(),
             name: TableName::try_new("places".to_string()).unwrap(),
-        });
+        })
+    }
+
+    #[test]
+    fn op_join_natural_inner_with_no_shared_attrs_normalises_to_product() {
+        // Inner natural join over disjoint schemas IS a Cartesian
+        // product — normalise to the canonical operator.
         let op = Op::join(
             two_attr_source(),
-            right,
+            disjoint_right_source(),
             crate::op_enums::JoinKind::Inner,
             crate::join::JoinOn::Natural,
         )
         .unwrap();
         assert!(matches!(op.kind(), OpKind::Product { .. }));
         assert_eq!(op.schema().cardinality(), 3);
+    }
+
+    #[test]
+    fn op_join_natural_outer_with_no_shared_attrs_preserves_natural_shape() {
+        // LeftOuter / RightOuter / FullOuter natural-join over
+        // disjoint schemas does NOT collapse to product: when one
+        // side is empty, the outer kind still emits padded rows
+        // which product would drop. The smart constructor must
+        // preserve the Natural shape so the outerness survives.
+        for kind in [
+            crate::op_enums::JoinKind::LeftOuter,
+            crate::op_enums::JoinKind::RightOuter,
+            crate::op_enums::JoinKind::FullOuter,
+        ] {
+            let op = Op::join(
+                two_attr_source(),
+                disjoint_right_source(),
+                kind,
+                crate::join::JoinOn::Natural,
+            )
+            .unwrap();
+            assert!(
+                matches!(op.kind(), OpKind::Join { .. }),
+                "outer-join natural over disjoint schemas must \
+                 not collapse to Product (kind: {kind:?})",
+            );
+            assert_eq!(op.schema().cardinality(), 3);
+        }
     }
 
     #[test]
