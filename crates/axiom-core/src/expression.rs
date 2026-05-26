@@ -86,9 +86,13 @@ impl OpaqueId {
 /// A predicate. Either a Bool-typed expression or an opaque
 /// closure-backed predicate registered with an execution context.
 ///
-/// Predicate's `Expr` arm holds an `Expression` whose static type
-/// must be Bool; the type check belongs to `Predicate::try_new`,
-/// which lands when type inference is implemented.
+/// The `Expr` arm currently carries any `Expression` and relies
+/// on `Op::restrict` to verify it infers to `Type::Bool` against
+/// the input schema. That re-validates the proof at every use
+/// site; a follow-up refactor lifts the proof into the type by
+/// gating `Predicate::Expr`'s payload behind a schema-aware
+/// smart constructor so the bool-typed contract is established
+/// once at construction.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Predicate {
