@@ -185,6 +185,17 @@ pub enum OpError {
         attribute: AttributeName,
     },
 
+    /// Set operators require the two operands to share a schema.
+    #[error("set operator operands have non-matching schemas")]
+    SchemaMismatch,
+
+    /// `Product` requires the two operands' schemas to be disjoint.
+    #[error("attribute `{attribute}` is present in both operands of a product")]
+    DuplicateAcrossOperands {
+        /// The first attribute name shared between the two schemas.
+        attribute: AttributeName,
+    },
+
     /// `Project`/etc. produced a schema invariant violation.
     #[error("output schema: {0}")]
     Schema(#[source] crate::schema::SchemaError),
@@ -310,6 +321,99 @@ impl Op {
             },
             schema,
         }
+    }
+
+    /// Set union. Output schema = left's; right must share the same
+    /// schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SchemaMismatch` if `left.schema() != right.schema()`.
+    pub fn union(left: Self, right: Self) -> Result<Self, OpError> {
+        if left.schema() != right.schema() {
+            return Err(OpError::SchemaMismatch);
+        }
+        let schema = left.schema().clone();
+        Ok(Self {
+            kind: OpKind::Union {
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            schema,
+        })
+    }
+
+    /// Set intersection. Schema rule identical to `union`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SchemaMismatch` if the operand schemas differ.
+    pub fn intersect(left: Self, right: Self) -> Result<Self, OpError> {
+        if left.schema() != right.schema() {
+            return Err(OpError::SchemaMismatch);
+        }
+        let schema = left.schema().clone();
+        Ok(Self {
+            kind: OpKind::Intersect {
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            schema,
+        })
+    }
+
+    /// Set difference (left minus right). Schema rule identical to
+    /// `union`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SchemaMismatch` if the operand schemas differ.
+    pub fn difference(left: Self, right: Self) -> Result<Self, OpError> {
+        if left.schema() != right.schema() {
+            return Err(OpError::SchemaMismatch);
+        }
+        let schema = left.schema().clone();
+        Ok(Self {
+            kind: OpKind::Difference {
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            schema,
+        })
+    }
+
+    /// Cartesian product. Output schema is the concatenation of the
+    /// operands' attributes. Attribute names must be disjoint —
+    /// otherwise the resulting header would violate the per-name
+    /// uniqueness invariant. Disambiguate by renaming first.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DuplicateAcrossOperands` if any attribute name in
+    /// `right`'s schema is also present in `left`'s.
+    pub fn product(left: Self, right: Self) -> Result<Self, OpError> {
+        use crate::schema::{Attribute, Schema};
+        for r in right.schema().attributes() {
+            if left.schema().contains(&r.name) {
+                return Err(OpError::DuplicateAcrossOperands {
+                    attribute: r.name.clone(),
+                });
+            }
+        }
+        let mut combined: Vec<Attribute> = Vec::with_capacity(
+            left.schema().attributes().len()
+                + right.schema().attributes().len(),
+        );
+        combined.extend(left.schema().attributes().iter().cloned());
+        combined.extend(right.schema().attributes().iter().cloned());
+        let schema = Schema::try_new(combined).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Product {
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            schema,
+        })
     }
 
     /// Borrow the cached output schema. O(1) — computed once at
@@ -603,6 +707,70 @@ mod tests {
         let input = two_attr_source();
         let result = Op::rename(input, attr("name"), attr("id"));
         let Err(OpError::AttributeAlreadyExists { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "id");
+    }
+
+    // ─── Set operators and product. ──────────────────────────────
+
+    #[test]
+    fn op_union_accepts_matching_schemas() {
+        let op = Op::union(two_attr_source(), two_attr_source()).unwrap();
+        assert_eq!(op.schema().cardinality(), 2);
+    }
+
+    #[test]
+    fn op_union_rejects_mismatched_schemas() {
+        use super::OpError;
+        let other = Op::source(Source::Table {
+            schema: Schema::try_new(vec![Attribute {
+                name: attr("only"),
+                ty: Type::Int64,
+            }])
+            .unwrap(),
+            name: TableName::try_new("solo".to_string()).unwrap(),
+        });
+        let result = Op::union(two_attr_source(), other);
+        assert_eq!(result.unwrap_err(), OpError::SchemaMismatch);
+    }
+
+    #[test]
+    fn op_intersect_accepts_matching_schemas() {
+        Op::intersect(two_attr_source(), two_attr_source()).unwrap();
+    }
+
+    #[test]
+    fn op_difference_accepts_matching_schemas() {
+        Op::difference(two_attr_source(), two_attr_source()).unwrap();
+    }
+
+    #[test]
+    fn op_product_concatenates_disjoint_schemas() {
+        let other = Op::source(Source::Table {
+            schema: Schema::try_new(vec![
+                Attribute { name: attr("city"), ty: Type::String },
+            ])
+            .unwrap(),
+            name: TableName::try_new("places".to_string()).unwrap(),
+        });
+        let op = Op::product(two_attr_source(), other).unwrap();
+        assert_eq!(op.schema().cardinality(), 3);
+        let names: alloc::vec::Vec<_> = op
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id", "name", "city"]);
+    }
+
+    #[test]
+    fn op_product_rejects_overlapping_schemas() {
+        use super::OpError;
+        let result = Op::product(two_attr_source(), two_attr_source());
+        let Err(OpError::DuplicateAcrossOperands { attribute }) = result
+        else {
             unreachable!();
         };
         assert_eq!(attribute.as_str(), "id");
