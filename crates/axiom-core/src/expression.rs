@@ -22,7 +22,39 @@ use crate::op_enums::{Agg, BinOp, UnOp};
 use crate::ty::{Type, Value};
 
 /// Length-bounded list of literals for `Expression::InList`.
+///
+/// Length is `1..=MAX_IN_LIST`. Duplicate literals are NOT yet
+/// rejected at construction (e.g. `x IN (1, 1)` is representable
+/// alongside `x IN (1)`); enforcing it requires `Value: Ord`,
+/// which is non-trivial across `Float64` / `Array` / `Relation` /
+/// `Optional` and lands when those variants get canonical
+/// comparison semantics. The architecture's
+/// `BoundedOrderedSet<Value, 1, MAX_IN_LIST>` shape is the target.
 pub type InListValues = Refined<Vec<Value>, LenItems<1, { MAX_IN_LIST }>>;
+
+/// `true` iff `expr` (or any sub-expression) is an
+/// `Expression::Agg`.
+///
+/// Aggregates are only admissible inside `Summarize`. Smart
+/// constructors of other operators (`Op::restrict`, `Op::extend`,
+/// `Op::join` theta predicate) call this to reject aggregate-
+/// bearing expressions before they reach a context that does not
+/// know what to do with them.
+#[must_use]
+pub fn contains_aggregate(expr: &Expression) -> bool {
+    match expr {
+        Expression::Attr(_) | Expression::Lit(_) => false,
+        Expression::BinOp(_, lhs, rhs) => {
+            contains_aggregate(lhs) || contains_aggregate(rhs)
+        }
+        Expression::UnOp(_, operand)
+        | Expression::Like(operand, _)
+        | Expression::IsNull(operand)
+        | Expression::Cast(operand, _)
+        | Expression::InList(operand, _) => contains_aggregate(operand),
+        Expression::Agg(_) => true,
+    }
+}
 
 /// Boolean-or-other-typed expression. Refinement to `Type::Bool` is
 /// the job of `Predicate`'s constructor; this enum is the

@@ -13,7 +13,9 @@ use alloc::vec::Vec;
 
 use thiserror::Error;
 
-use crate::expression::{BoolExpression, Expression};
+use crate::expression::{
+    contains_aggregate, BoolExpression, Expression,
+};
 use crate::identifier::AttributeName;
 use crate::infer::InferError;
 use crate::schema::Schema;
@@ -84,21 +86,6 @@ impl CanonicalPredicate {
         let mut out = BTreeSet::new();
         free_attrs_into(self.inner.as_expression(), &mut out);
         out
-    }
-}
-
-fn contains_aggregate(expr: &Expression) -> bool {
-    match expr {
-        Expression::Attr(_) | Expression::Lit(_) => false,
-        Expression::BinOp(_, lhs, rhs) => {
-            contains_aggregate(lhs) || contains_aggregate(rhs)
-        }
-        Expression::UnOp(_, operand)
-        | Expression::Like(operand, _)
-        | Expression::IsNull(operand)
-        | Expression::Cast(operand, _)
-        | Expression::InList(operand, _) => contains_aggregate(operand),
-        Expression::Agg(_) => true,
     }
 }
 

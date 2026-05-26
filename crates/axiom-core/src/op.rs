@@ -202,6 +202,13 @@ pub enum OpError {
     #[error("type inference: {0}")]
     Infer(#[source] crate::infer::InferError),
 
+    /// An aggregate (`Expression::Agg`) appeared in a context that
+    /// does not admit it. Aggregates are admissible only inside
+    /// `Summarize`'s `aggs` set, not in `Restrict`, `Extend`, or
+    /// the predicate of a theta `Join`.
+    #[error("aggregate not admissible outside Summarize")]
+    AggregateOutsideSummarize,
+
     /// `Unnest` / `Modify` reached an attribute whose type is not a
     /// nested relation.
     #[error("path target attribute `{attribute}` is not a nested relation")]
@@ -277,27 +284,30 @@ impl Op {
     /// For `Predicate::Expr`, the wrapped `BoolExpression` has
     /// already been proved Bool-typed against some schema at
     /// construction. We re-verify against `input.schema()` so
-    /// cross-schema misuse (the carrier was built against schema X
-    /// but used on input with schema Y) is rejected here.
-    /// `Predicate::Opaque` carries no static expression and skips
-    /// the check.
+    /// cross-schema misuse is rejected here, and reject any
+    /// aggregate sub-expression (aggregates are admissible only
+    /// inside `Summarize`). `Predicate::Opaque` skips both checks.
     ///
     /// # Errors
     ///
     /// Returns `Infer` if the wrapped expression fails inference
-    /// against `input.schema()` or does not produce `Type::Bool`.
+    /// or does not produce `Type::Bool`. Returns
+    /// `AggregateOutsideSummarize` if the predicate contains an
+    /// aggregate.
     pub fn restrict(
         input: Self,
         predicate: Predicate,
     ) -> Result<Self, OpError> {
+        use crate::expression::contains_aggregate;
         use crate::ty::Type;
 
         if let Predicate::Expr(ref bool_expr) = predicate {
-            let ty = crate::infer::infer(
-                bool_expr.as_expression(),
-                input.schema(),
-            )
-            .map_err(OpError::Infer)?;
+            let expr = bool_expr.as_expression();
+            if contains_aggregate(expr) {
+                return Err(OpError::AggregateOutsideSummarize);
+            }
+            let ty = crate::infer::infer(expr, input.schema())
+                .map_err(OpError::Infer)?;
             if ty != Type::Bool {
                 return Err(OpError::Infer(
                     crate::infer::InferError::TypeMismatch {
@@ -388,12 +398,14 @@ impl Op {
 
     /// Extend the input with a new attribute. The expression is
     /// type-checked against the input schema and the inferred type
-    /// becomes the new attribute's type.
+    /// becomes the new attribute's type. Aggregates are rejected
+    /// (they are admissible only inside `Summarize`).
     ///
     /// # Errors
     ///
     /// Returns `AttributeAlreadyExists` if `name` already exists in
-    /// the input schema, `Infer` if `expr` does not type-check
+    /// the input schema, `AggregateOutsideSummarize` if `expr`
+    /// contains an aggregate, `Infer` if `expr` does not type-check
     /// against the input schema, and `Schema` if the resulting
     /// header somehow violates the schema invariants (defence in
     /// depth — the disjointness check above prevents this in
@@ -403,9 +415,14 @@ impl Op {
         name: AttributeName,
         expr: Expression,
     ) -> Result<Self, OpError> {
+        use crate::expression::contains_aggregate;
         use crate::schema::{Attribute, Schema};
+
         if input.schema().contains(&name) {
             return Err(OpError::AttributeAlreadyExists { attribute: name });
+        }
+        if contains_aggregate(&expr) {
+            return Err(OpError::AggregateOutsideSummarize);
         }
         let ty = crate::infer::infer(&expr, input.schema())
             .map_err(OpError::Infer)?;
@@ -737,29 +754,41 @@ impl Op {
     ///   name between the two sides (their types must match) and
     ///   coalesces them in the output. Output schema is left's
     ///   attributes followed by right's minus the shared names.
+    ///   If there are no shared names, the result is normalised to
+    ///   `Op::product(left, right)` — natural-join over disjoint
+    ///   schemas is exactly a Cartesian product, and keeping both
+    ///   shapes would widen the AST's canonical state.
     /// - `JoinOn::Equi(pairs)`: each `(l, r)` pair must reference
     ///   an attribute that exists on its side and the two types
     ///   must agree. Schema is left's attributes followed by
     ///   right's (which must be name-disjoint, like `product`;
     ///   the equality is enforced at runtime, not by coalescing).
-    /// - `JoinOn::Theta(pred)`: same shape as `Equi` (name-disjoint
-    ///   concatenation). The predicate is opaque to the smart
-    ///   constructor.
+    /// - `JoinOn::Theta(pred)`: same shape as `Equi`
+    ///   (name-disjoint concatenation). The predicate is
+    ///   re-verified against the combined schema and must produce
+    ///   `Type::Bool` — `BoolExpression`'s proof was established
+    ///   against some other schema and is not transferable.
     ///
     /// # Errors
     ///
     /// Returns `UnknownAttribute` (equi-join references a missing
     /// attribute), `JoinTypeMismatch` (equi-join or natural-join
-    /// joined columns have differing types), or
+    /// joined columns have differing types),
     /// `DuplicateAcrossOperands` (theta/equi-join produced a name
-    /// collision in the output).
+    /// collision in the output), `Infer` (theta predicate fails
+    /// type-checking on the combined schema), or
+    /// `AggregateOutsideSummarize` (theta predicate contains an
+    /// aggregate).
     pub fn join(
         left: Self,
         right: Self,
         kind: JoinKind,
         on: JoinOn,
     ) -> Result<Self, OpError> {
+        use crate::expression::contains_aggregate;
         use crate::schema::{Attribute, Schema};
+        use crate::ty::Type;
+
         let schema = match &on {
             JoinOn::Natural => {
                 let mut shared: Vec<AttributeName> = Vec::new();
@@ -772,6 +801,13 @@ impl Op {
                         }
                         shared.push(l.name.clone());
                     }
+                }
+                if shared.is_empty() {
+                    // Natural join over disjoint schemas IS a
+                    // Cartesian product. Normalise to the canonical
+                    // operator instead of carrying a degenerate
+                    // Natural state through the AST.
+                    return Self::product(left, right);
                 }
                 let mut combined: Vec<Attribute> =
                     left.schema().attributes().to_vec();
@@ -804,7 +840,31 @@ impl Op {
                 }
                 concat_disjoint_schemas(&left, &right)?
             }
-            JoinOn::Theta(_) => concat_disjoint_schemas(&left, &right)?,
+            JoinOn::Theta(pred) => {
+                let combined =
+                    concat_disjoint_schemas(&left, &right)?;
+                // Theta predicate's BoolExpression proof was
+                // established against some other schema. Re-verify
+                // against the joined schema; reject aggregates
+                // outside Summarize.
+                if let Predicate::Expr(bool_expr) = pred {
+                    let expr = bool_expr.as_expression();
+                    if contains_aggregate(expr) {
+                        return Err(OpError::AggregateOutsideSummarize);
+                    }
+                    let ty = crate::infer::infer(expr, &combined)
+                        .map_err(OpError::Infer)?;
+                    if ty != Type::Bool {
+                        return Err(OpError::Infer(
+                            crate::infer::InferError::TypeMismatch {
+                                expected: Type::Bool,
+                                got: ty,
+                            },
+                        ));
+                    }
+                }
+                combined
+            }
         };
         Ok(Self {
             kind: OpKind::Join {
@@ -1380,6 +1440,132 @@ mod tests {
         assert_eq!(attribute.as_str(), "name");
     }
 
+    #[test]
+    fn op_join_natural_with_no_shared_attrs_normalises_to_product() {
+        // left.schema = (id, name); right.schema = (city) — no
+        // shared names. Per the architecture spec, this collapses
+        // to a Cartesian product.
+        let right = Op::source(Source::Table {
+            schema: Schema::try_new(vec![Attribute {
+                name: attr("city"),
+                ty: Type::String,
+            }])
+            .unwrap(),
+            name: TableName::try_new("places".to_string()).unwrap(),
+        });
+        let op = Op::join(
+            two_attr_source(),
+            right,
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Natural,
+        )
+        .unwrap();
+        assert!(matches!(op.kind(), OpKind::Product { .. }));
+        assert_eq!(op.schema().cardinality(), 3);
+    }
+
+    #[test]
+    fn op_join_theta_admits_bool_predicate_over_combined_schema() {
+        use crate::expression::{
+            BoolExpression, Expression, Predicate,
+        };
+        use crate::op_enums::BinOp;
+
+        let left = two_attr_source();
+        let right = right_orders_source();
+        let combined = Schema::try_new(vec![
+            Attribute { name: attr("id"), ty: Type::Int64 },
+            Attribute { name: attr("name"), ty: Type::String },
+            Attribute { name: attr("order_id"), ty: Type::Int64 },
+            Attribute { name: attr("user_id"), ty: Type::Int64 },
+        ])
+        .unwrap();
+        let bool_expr = BoolExpression::try_new(
+            &combined,
+            Expression::BinOp(
+                BinOp::Eq,
+                alloc::boxed::Box::new(Expression::Attr(attr("id"))),
+                alloc::boxed::Box::new(Expression::Attr(attr("user_id"))),
+            ),
+        )
+        .unwrap();
+        let op = Op::join(
+            left,
+            right,
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Theta(Predicate::Expr(bool_expr)),
+        )
+        .unwrap();
+        assert_eq!(op.schema().cardinality(), 4);
+    }
+
+    #[test]
+    fn op_join_theta_rejects_predicate_with_unknown_attr() {
+        use super::OpError;
+        use crate::expression::{
+            BoolExpression, Expression, Predicate,
+        };
+
+        // Predicate refers to 'flag' which is in neither side's
+        // schema. The BoolExpression built against an unrelated
+        // schema reaches Op::join's re-verification on the
+        // combined schema and fails.
+        let other_schema = Schema::try_new(vec![Attribute {
+            name: attr("flag"),
+            ty: Type::Bool,
+        }])
+        .unwrap();
+        let bool_expr = BoolExpression::try_new(
+            &other_schema,
+            Expression::Attr(attr("flag")),
+        )
+        .unwrap();
+        let result = Op::join(
+            two_attr_source(),
+            right_orders_source(),
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Theta(Predicate::Expr(bool_expr)),
+        );
+        let Err(OpError::Infer(_)) = result else {
+            unreachable!();
+        };
+    }
+
+    #[test]
+    fn op_join_theta_rejects_aggregate_predicate() {
+        use super::OpError;
+        use crate::expression::{
+            BoolExpression, Expression, Predicate,
+        };
+        use crate::op_enums::{Agg, BinOp};
+        use crate::ty::Value;
+
+        // BoolExpression with an Agg sub-expression. The proof at
+        // BoolExpression construction passed only because the
+        // wrapping comparison still infers Bool against a schema
+        // that has 'count' as Int64. Op::join's theta branch
+        // rejects the aggregate in this non-summarize context.
+        let bool_expr_schema = Schema::try_new(vec![Attribute {
+            name: attr("count"),
+            ty: Type::Int64,
+        }])
+        .unwrap();
+        let expr = Expression::BinOp(
+            BinOp::Gt,
+            alloc::boxed::Box::new(Expression::Agg(Agg::Sum(attr("count")))),
+            alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
+        );
+        let bool_expr =
+            BoolExpression::try_new(&bool_expr_schema, expr).unwrap();
+        let result = Op::join(
+            two_attr_source(),
+            right_orders_source(),
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Theta(Predicate::Expr(bool_expr)),
+        );
+        assert_eq!(result.unwrap_err(), OpError::AggregateOutsideSummarize);
+    }
+
     // ─── Extend. ─────────────────────────────────────────────────
 
     #[test]
@@ -1423,6 +1609,44 @@ mod tests {
         let Err(OpError::Infer(_)) = result else {
             unreachable!();
         };
+    }
+
+    #[test]
+    fn op_extend_rejects_aggregate_expression() {
+        use super::OpError;
+        use crate::expression::Expression;
+        use crate::op_enums::Agg;
+        let expr = Expression::Agg(Agg::Sum(attr("id")));
+        let result = Op::extend(two_attr_source(), attr("total"), expr);
+        assert_eq!(result.unwrap_err(), OpError::AggregateOutsideSummarize);
+    }
+
+    #[test]
+    fn op_restrict_rejects_aggregate_predicate() {
+        use super::OpError;
+        use crate::expression::{
+            BoolExpression, Expression, Predicate,
+        };
+        use crate::op_enums::{Agg, BinOp};
+        use crate::ty::Value;
+        // Build a Bool-typed expression that contains an aggregate
+        // against a schema where 'id' is Int64.
+        let bool_expr = BoolExpression::try_new(
+            two_attr_source().schema(),
+            Expression::BinOp(
+                BinOp::Gt,
+                alloc::boxed::Box::new(Expression::Agg(Agg::Sum(
+                    attr("id"),
+                ))),
+                alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
+            ),
+        )
+        .unwrap();
+        let result = Op::restrict(
+            two_attr_source(),
+            Predicate::Expr(bool_expr),
+        );
+        assert_eq!(result.unwrap_err(), OpError::AggregateOutsideSummarize);
     }
 
     // ─── Summarize. ──────────────────────────────────────────────
