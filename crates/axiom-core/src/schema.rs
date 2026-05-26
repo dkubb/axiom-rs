@@ -95,6 +95,20 @@ impl Schema {
     pub const fn cardinality(&self) -> usize {
         self.attributes.as_inner().len()
     }
+
+    /// Look up an attribute by name. `None` if absent.
+    #[must_use]
+    pub fn find(&self, name: &AttributeName) -> Option<&Attribute> {
+        self.attributes()
+            .iter()
+            .find(|attribute| &attribute.name == name)
+    }
+
+    /// `true` iff an attribute with this name is in the schema.
+    #[must_use]
+    pub fn contains(&self, name: &AttributeName) -> bool {
+        self.find(name).is_some()
+    }
 }
 
 #[cfg(test)]

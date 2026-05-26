@@ -36,7 +36,7 @@ pub use identifier::{
 pub use join::{EquiPair, EquiPairs, EquiPairsError, JoinOn};
 pub use op::{
     AttributeSet, AttributeSetError, GroupingSet, GroupingSetError,
-    NamedAggKey, NamedAggSet, NamedAggSetError, Op,
+    NamedAggKey, NamedAggSet, NamedAggSetError, Op, OpError,
 };
 pub use limit::{
     BoundedIndex, BoundedIndexError, LimitCount, LimitCountError,

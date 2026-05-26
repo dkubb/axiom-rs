@@ -84,6 +84,21 @@ pub enum Source {
     },
 }
 
+impl Source {
+    /// Borrow the header that describes the rows this source
+    /// produces. Cheap accessor used by `Op` smart constructors to
+    /// drive schema-aware validation.
+    #[must_use]
+    #[inline]
+    pub const fn schema(&self) -> &Schema {
+        match self {
+            Self::Memory { schema, .. } | Self::Table { schema, .. } => {
+                schema
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used,
         reason = "explicit in test code")]

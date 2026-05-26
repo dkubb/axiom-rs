@@ -155,17 +155,169 @@ impl NamedAggSet {
 
 /// Operator AST node — opaque to callers; matched on internally
 /// through `Op::kind()`.
+///
+/// Each node caches its computed output `Schema`. Smart constructors
+/// validate every operator's invariants against the input schemas
+/// and compute the output schema once, so consumers — the optimiser,
+/// type checker, backends — can read `Op::schema()` in O(1) without
+/// recomputing through the tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Op {
     kind: OpKind,
+    schema: crate::schema::Schema,
+}
+
+/// Errors common to every schema-aware `Op` smart constructor.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpError {
+    /// A referenced attribute is not in the input schema.
+    #[error("attribute `{attribute}` is not in the input schema")]
+    UnknownAttribute {
+        /// The offending name.
+        attribute: AttributeName,
+    },
+
+    /// `Rename`'s target name is already present in the input schema.
+    #[error("target attribute `{attribute}` already exists in the input schema")]
+    AttributeAlreadyExists {
+        /// The colliding target name.
+        attribute: AttributeName,
+    },
+
+    /// `Project`/etc. produced a schema invariant violation.
+    #[error("output schema: {0}")]
+    Schema(#[source] crate::schema::SchemaError),
 }
 
 impl Op {
-    /// Build a leaf from a `Source`.
+    /// Build a leaf from a `Source`. The output schema is the
+    /// source's schema verbatim.
     #[must_use]
     #[inline]
-    pub const fn source(src: Source) -> Self {
-        Self { kind: OpKind::Source(src) }
+    pub fn source(src: Source) -> Self {
+        let schema = src.schema().clone();
+        Self { kind: OpKind::Source(src), schema }
+    }
+
+    /// Project the input's rows down to `attrs`, in the order given.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownAttribute` if any name in `attrs` is missing
+    /// from `input`'s schema.
+    pub fn project(
+        input: Self,
+        attrs: AttributeSet,
+    ) -> Result<Self, OpError> {
+        use crate::schema::{Attribute, Schema};
+        let input_schema = input.schema();
+        let mut projected: Vec<Attribute> = Vec::with_capacity(attrs.as_slice().len());
+        for name in attrs.as_slice() {
+            let attr = input_schema.find(name).ok_or_else(|| {
+                OpError::UnknownAttribute { attribute: name.clone() }
+            })?;
+            projected.push(attr.clone());
+        }
+        let schema = Schema::try_new(projected).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Project {
+                input: Box::new(input),
+                attrs,
+            },
+            schema,
+        })
+    }
+
+    /// Restrict the input's rows by a `Predicate`. The output schema
+    /// is identical to the input's.
+    #[must_use]
+    pub fn restrict(input: Self, predicate: Predicate) -> Self {
+        let schema = input.schema().clone();
+        Self {
+            kind: OpKind::Restrict {
+                input: Box::new(input),
+                predicate,
+            },
+            schema,
+        }
+    }
+
+    /// Rename `from` to `to`, preserving order and types.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownAttribute` if `from` is missing from the
+    /// input schema, and `AttributeAlreadyExists` if `to` is already
+    /// present.
+    pub fn rename(
+        input: Self,
+        from: AttributeName,
+        to: AttributeName,
+    ) -> Result<Self, OpError> {
+        use crate::schema::{Attribute, Schema};
+        let input_schema = input.schema();
+        if !input_schema.contains(&from) {
+            return Err(OpError::UnknownAttribute { attribute: from });
+        }
+        if from != to && input_schema.contains(&to) {
+            return Err(OpError::AttributeAlreadyExists { attribute: to });
+        }
+        let renamed: Vec<Attribute> = input_schema
+            .attributes()
+            .iter()
+            .map(|a| {
+                if a.name == from {
+                    Attribute { name: to.clone(), ty: a.ty.clone() }
+                } else {
+                    a.clone()
+                }
+            })
+            .collect();
+        let schema = Schema::try_new(renamed).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Rename {
+                input: Box::new(input),
+                from,
+                to,
+            },
+            schema,
+        })
+    }
+
+    /// Order the input by `by`. Output schema unchanged.
+    #[must_use]
+    pub fn order(input: Self, by: OrderKeys) -> Self {
+        let schema = input.schema().clone();
+        Self {
+            kind: OpKind::Order {
+                input: Box::new(input),
+                by,
+            },
+            schema,
+        }
+    }
+
+    /// Window over the input. Output schema unchanged.
+    #[must_use]
+    pub fn limit(input: Self, offset: Offset, count: LimitCount) -> Self {
+        let schema = input.schema().clone();
+        Self {
+            kind: OpKind::Limit {
+                input: Box::new(input),
+                offset,
+                count,
+            },
+            schema,
+        }
+    }
+
+    /// Borrow the cached output schema. O(1) — computed once at
+    /// construction.
+    #[must_use]
+    #[inline]
+    pub const fn schema(&self) -> &crate::schema::Schema {
+        &self.schema
     }
 
     /// Internal accessor used by the optimiser and backends. The
@@ -353,6 +505,21 @@ mod tests {
 
     // ─── Op constructors. ────────────────────────────────────────
 
+    fn two_attr_schema() -> Schema {
+        Schema::try_new(vec![
+            Attribute { name: attr("id"), ty: Type::Int64 },
+            Attribute { name: attr("name"), ty: Type::String },
+        ])
+        .unwrap()
+    }
+
+    fn two_attr_source() -> Op {
+        Op::source(Source::Table {
+            schema: two_attr_schema(),
+            name: TableName::try_new("users".to_string()).unwrap(),
+        })
+    }
+
     #[test]
     fn op_source_builds_a_leaf() {
         let src = Source::Table {
@@ -363,5 +530,81 @@ mod tests {
         let OpKind::Source(_) = op.kind() else {
             unreachable!();
         };
+        assert_eq!(op.schema().cardinality(), 1);
+    }
+
+    #[test]
+    fn op_project_admits_known_attrs() {
+        let input = two_attr_source();
+        let attrs = AttributeSet::try_new(vec![attr("name")]).unwrap();
+        let op = Op::project(input, attrs).unwrap();
+        assert_eq!(op.schema().cardinality(), 1);
+        assert_eq!(
+            op.schema().attributes()[0].name.as_str(),
+            "name",
+        );
+    }
+
+    #[test]
+    fn op_project_rejects_unknown_attr() {
+        use super::OpError;
+        let input = two_attr_source();
+        let attrs = AttributeSet::try_new(vec![attr("missing")]).unwrap();
+        let result = Op::project(input, attrs);
+        let Err(OpError::UnknownAttribute { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "missing");
+    }
+
+    #[test]
+    fn op_restrict_preserves_schema() {
+        use crate::expression::{Expression, Predicate};
+        use crate::op_enums::BinOp;
+        use crate::ty::Value;
+        let input = two_attr_source();
+        let predicate = Predicate::Expr(Expression::BinOp(
+            BinOp::Gt,
+            alloc::boxed::Box::new(Expression::Attr(attr("id"))),
+            alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
+        ));
+        let op = Op::restrict(input, predicate);
+        assert_eq!(op.schema().cardinality(), 2);
+    }
+
+    #[test]
+    fn op_rename_swaps_attribute_in_schema() {
+        let input = two_attr_source();
+        let op =
+            Op::rename(input, attr("name"), attr("full_name")).unwrap();
+        let names: alloc::vec::Vec<_> = op
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id", "full_name"]);
+    }
+
+    #[test]
+    fn op_rename_rejects_unknown_source() {
+        use super::OpError;
+        let input = two_attr_source();
+        let result = Op::rename(input, attr("missing"), attr("x"));
+        let Err(OpError::UnknownAttribute { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "missing");
+    }
+
+    #[test]
+    fn op_rename_rejects_target_collision() {
+        use super::OpError;
+        let input = two_attr_source();
+        let result = Op::rename(input, attr("name"), attr("id"));
+        let Err(OpError::AttributeAlreadyExists { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "id");
     }
 }
