@@ -32,7 +32,10 @@ pub use constraint::{
 pub use expression::{
     BoolExpression, Expression, InListValues, OpaqueId, Predicate,
 };
-pub use infer::{agg_ty, infer as infer_type, infer_value, InferError};
+pub use infer::{
+    agg_ty, infer as infer_type, infer_value, row_matches_schema,
+    value_matches_type, InferError, ValueTypeError,
+};
 pub use identifier::{
     AttributeName, AttributeNameError, Pattern, PatternError,
     TableName, TableNameError,
@@ -65,5 +68,7 @@ pub use schema::{
     Attribute, AttributeKey, Schema, SchemaCardinality,
     SchemaCardinalityError, SchemaError,
 };
-pub use source::{Rows, RowsError, Source};
+pub use source::{
+    MemorySource, MemorySourceError, Rows, RowsError, Source,
+};
 pub use ty::{Type, Value};

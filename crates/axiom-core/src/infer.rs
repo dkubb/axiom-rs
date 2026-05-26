@@ -140,6 +140,154 @@ pub fn infer(
     }
 }
 
+/// Failure path returned by `value_matches_type` when a `Value`
+/// does not conform to a `Type`. Carries the structural location
+/// inside the value tree so callers can produce precise
+/// diagnostics.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ValueTypeError {
+    /// Scalar mismatch (or compound-value-vs-scalar-type) at the
+    /// current node.
+    #[error("value does not match type at this position")]
+    Mismatch,
+
+    /// Mismatch nested inside an `Array`'s element position.
+    #[error("array element at index {index}: {source}")]
+    ArrayElement {
+        /// Position inside the array.
+        index: usize,
+        /// The nested failure.
+        #[source]
+        source: alloc::boxed::Box<Self>,
+    },
+
+    /// Mismatch nested inside a relation row's attribute position.
+    #[error("relation field at position {position}: {source}")]
+    RelationField {
+        /// Position inside the row.
+        position: usize,
+        /// The nested failure.
+        #[source]
+        source: alloc::boxed::Box<Self>,
+    },
+
+    /// Mismatch nested inside a `Relation`'s row position.
+    #[error("relation row at index {index}: {source}")]
+    RelationRow {
+        /// Position inside the relation.
+        index: usize,
+        /// The nested failure.
+        #[source]
+        source: alloc::boxed::Box<Self>,
+    },
+
+    /// A relation row had the wrong width for the nested schema.
+    #[error("row width {actual} differs from schema width {expected}")]
+    RowWidth {
+        /// Width the schema requires.
+        expected: usize,
+        /// Width of the row we received.
+        actual: usize,
+    },
+
+    /// Mismatch nested inside an `Optional`'s inner value.
+    #[error("optional value: {0}")]
+    Optional(#[source] alloc::boxed::Box<Self>),
+}
+
+/// `Ok(())` iff `value`'s shape conforms to `ty` recursively.
+///
+/// Scalars are compared variant-by-variant; compound values
+/// (`Array`, `Relation`, `Optional`) are walked structurally,
+/// recursing into the inner type and surfacing the path of the
+/// first mismatch.
+///
+/// # Errors
+///
+/// Returns `ValueTypeError::Mismatch` at the root level for a
+/// shape disagreement, with `ArrayElement` / `RelationRow` /
+/// `Optional` wrappers naming the path of the first descent that
+/// diverged.
+pub fn value_matches_type(
+    value: &Value,
+    ty: &Type,
+) -> Result<(), ValueTypeError> {
+    use alloc::boxed::Box;
+    match (value, ty) {
+        (Value::Bool(_), Type::Bool)
+        | (Value::Int32(_), Type::Int32)
+        | (Value::Int64(_), Type::Int64)
+        | (Value::Float64(_), Type::Float64)
+        | (Value::Decimal(_), Type::Decimal)
+        | (Value::String(_), Type::String)
+        | (Value::Bytes(_), Type::Bytes)
+        | (Value::DateTime(_), Type::DateTime)
+        | (Value::Json(_), Type::Json)
+        | (Value::Optional(None), Type::Optional(_)) => Ok(()),
+        (Value::Optional(Some(inner_val)), Type::Optional(inner_ty)) => {
+            value_matches_type(inner_val, inner_ty)
+                .map_err(|e| ValueTypeError::Optional(Box::new(e)))
+        }
+        (Value::Array(values), Type::Array(inner_ty)) => {
+            for (index, v) in values.as_inner().iter().enumerate() {
+                value_matches_type(v, inner_ty).map_err(|e| {
+                    ValueTypeError::ArrayElement {
+                        index,
+                        source: Box::new(e),
+                    }
+                })?;
+            }
+            Ok(())
+        }
+        (Value::Relation(rows), Type::Relation(schema)) => {
+            for (index, row) in rows.as_inner().iter().enumerate() {
+                row_matches_schema(row, schema).map_err(|e| {
+                    ValueTypeError::RelationRow {
+                        index,
+                        source: Box::new(e),
+                    }
+                })?;
+            }
+            Ok(())
+        }
+        _ => Err(ValueTypeError::Mismatch),
+    }
+}
+
+/// `Ok(())` iff `row` has the same width as `schema` and every
+/// position's value matches its attribute's type.
+///
+/// # Errors
+///
+/// Returns `RowWidth` for a width mismatch, otherwise the
+/// structural error from the first non-matching value.
+pub fn row_matches_schema(
+    row: &crate::row::Row,
+    schema: &Schema,
+) -> Result<(), ValueTypeError> {
+    use alloc::boxed::Box;
+    let expected = schema.cardinality();
+    let actual = row.len();
+    if actual != expected {
+        return Err(ValueTypeError::RowWidth { expected, actual });
+    }
+    for (position, (value, attribute)) in row
+        .as_slice()
+        .iter()
+        .zip(schema.attributes().iter())
+        .enumerate()
+    {
+        value_matches_type(value, &attribute.ty).map_err(|e| {
+            ValueTypeError::RelationField {
+                position,
+                source: Box::new(e),
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// Infer the type of a `Value` literal. Compound values
 /// (`Relation`, `Array`, `Optional`) require surrounding schema
 /// context; this function reports `AmbiguousLiteral` for them.
