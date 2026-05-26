@@ -83,21 +83,75 @@ impl OpaqueId {
     }
 }
 
+/// An `Expression` proved to infer to `Type::Bool` against a
+/// `Schema`.
+///
+/// The proof is established once at construction through
+/// `BoolExpression::try_new(schema, expr)`; the inner expression
+/// is private so a `BoolExpression` cannot be fabricated.
+///
+/// The proof is relative to the schema used at construction. Op
+/// constructors that consume a `BoolExpression` (only
+/// `Op::restrict` today) re-verify against their input schema —
+/// the carrier proof removes "syntactically-non-Bool" from the
+/// representable state space, but cross-schema use is still
+/// guarded at the use site.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoolExpression {
+    expr: Expression,
+}
+
+impl BoolExpression {
+    /// Type-check `expr` against `schema` and require `Type::Bool`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying `InferError` if inference fails, or
+    /// `InferError::TypeMismatch { expected: Bool, got: <inferred> }`
+    /// when the expression has a non-Bool inferred type.
+    pub fn try_new(
+        schema: &crate::schema::Schema,
+        expr: Expression,
+    ) -> Result<Self, crate::infer::InferError> {
+        let ty = crate::infer::infer(&expr, schema)?;
+        if ty != Type::Bool {
+            return Err(crate::infer::InferError::TypeMismatch {
+                expected: Type::Bool,
+                got: ty,
+            });
+        }
+        Ok(Self { expr })
+    }
+
+    /// Borrow the underlying expression.
+    #[must_use]
+    #[inline]
+    pub const fn as_expression(&self) -> &Expression {
+        &self.expr
+    }
+
+    /// Consume and return the underlying expression.
+    #[must_use]
+    #[inline]
+    pub fn into_expression(self) -> Expression {
+        self.expr
+    }
+}
+
 /// A predicate. Either a Bool-typed expression or an opaque
 /// closure-backed predicate registered with an execution context.
 ///
-/// The `Expr` arm currently carries any `Expression` and relies
-/// on `Op::restrict` to verify it infers to `Type::Bool` against
-/// the input schema. That re-validates the proof at every use
-/// site; a follow-up refactor lifts the proof into the type by
-/// gating `Predicate::Expr`'s payload behind a schema-aware
-/// smart constructor so the bool-typed contract is established
-/// once at construction.
+/// `Predicate::Expr` wraps a `BoolExpression` whose payload has
+/// already been proved to be Bool-typed against some schema. That
+/// removes the bare-Expression-with-no-Bool-proof state from the
+/// representable space. `Op::restrict` re-verifies against its own
+/// input schema, so cross-schema misuse is still caught.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Predicate {
-    /// Boolean expression.
-    Expr(Expression),
+    /// Bool-typed expression (proved at `BoolExpression`
+    /// construction).
+    Expr(BoolExpression),
     /// Opaque closure-backed predicate. Only constructible through
     /// the in-memory backend's `restrict_with` API.
     Opaque(OpaqueId),
@@ -110,10 +164,12 @@ mod tests {
     use alloc::boxed::Box;
     use alloc::string::ToString;
 
-    use super::{Expression, OpaqueId, Predicate};
+    use super::{BoolExpression, Expression, OpaqueId, Predicate};
     use crate::identifier::AttributeName;
+    use crate::infer::InferError;
     use crate::op_enums::BinOp;
-    use crate::ty::Value;
+    use crate::schema::{Attribute, Schema};
+    use crate::ty::{Type, Value};
 
     #[test]
     fn expression_attr_and_literal() {
@@ -128,9 +184,65 @@ mod tests {
         };
     }
 
+    fn attr(name: &str) -> AttributeName {
+        AttributeName::try_new(name.to_string()).unwrap()
+    }
+
+    fn bool_schema() -> Schema {
+        Schema::try_new(alloc::vec![Attribute {
+            name: attr("flag"),
+            ty: Type::Bool,
+        }])
+        .unwrap()
+    }
+
     #[test]
-    fn predicate_expr_round_trip() {
-        let p = Predicate::Expr(Expression::Lit(Value::Bool(true)));
+    fn bool_expression_accepts_bool_typed_expression() {
+        let e = BoolExpression::try_new(
+            &bool_schema(),
+            Expression::Lit(Value::Bool(true)),
+        )
+        .unwrap();
+        assert!(matches!(
+            e.as_expression(),
+            Expression::Lit(Value::Bool(true)),
+        ));
+    }
+
+    #[test]
+    fn bool_expression_rejects_non_bool_expression() {
+        let err = BoolExpression::try_new(
+            &bool_schema(),
+            Expression::Lit(Value::Int32(0)),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            InferError::TypeMismatch {
+                expected: Type::Bool,
+                got: Type::Int32,
+            },
+        ));
+    }
+
+    #[test]
+    fn bool_expression_rejects_unknown_attribute() {
+        let err = BoolExpression::try_new(
+            &bool_schema(),
+            Expression::Attr(attr("missing")),
+        )
+        .unwrap_err();
+        assert!(matches!(err, InferError::UnknownAttribute(_)));
+    }
+
+    #[test]
+    fn predicate_expr_wraps_bool_expression() {
+        let e = BoolExpression::try_new(
+            &bool_schema(),
+            Expression::Attr(attr("flag")),
+        )
+        .unwrap();
+        let p = Predicate::Expr(e);
         let Predicate::Expr(_) = p else { unreachable!() };
     }
 

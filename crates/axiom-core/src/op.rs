@@ -271,28 +271,33 @@ impl Op {
         })
     }
 
-    /// Restrict the input's rows by a `Predicate`. The output schema
-    /// is identical to the input's.
+    /// Restrict the input's rows by a `Predicate`. The output
+    /// schema is identical to the input's.
     ///
-    /// For `Predicate::Expr`, the wrapped expression is type-checked
-    /// against `input.schema()` and must infer to `Type::Bool`.
-    /// `Predicate::Opaque` carries no static expression, so no type
-    /// check applies.
+    /// For `Predicate::Expr`, the wrapped `BoolExpression` has
+    /// already been proved Bool-typed against some schema at
+    /// construction. We re-verify against `input.schema()` so
+    /// cross-schema misuse (the carrier was built against schema X
+    /// but used on input with schema Y) is rejected here.
+    /// `Predicate::Opaque` carries no static expression and skips
+    /// the check.
     ///
     /// # Errors
     ///
-    /// Returns `Infer` if the predicate expression fails inference
-    /// (unknown attribute, mismatched operator types) or does not
-    /// produce a `Type::Bool` result.
+    /// Returns `Infer` if the wrapped expression fails inference
+    /// against `input.schema()` or does not produce `Type::Bool`.
     pub fn restrict(
         input: Self,
         predicate: Predicate,
     ) -> Result<Self, OpError> {
         use crate::ty::Type;
 
-        if let Predicate::Expr(ref expr) = predicate {
-            let ty = crate::infer::infer(expr, input.schema())
-                .map_err(OpError::Infer)?;
+        if let Predicate::Expr(ref bool_expr) = predicate {
+            let ty = crate::infer::infer(
+                bool_expr.as_expression(),
+                input.schema(),
+            )
+            .map_err(OpError::Infer)?;
             if ty != Type::Bool {
                 return Err(OpError::Infer(
                     crate::infer::InferError::TypeMismatch {
@@ -1103,45 +1108,45 @@ mod tests {
 
     #[test]
     fn op_restrict_preserves_schema() {
-        use crate::expression::{Expression, Predicate};
+        use crate::expression::{BoolExpression, Expression, Predicate};
         use crate::op_enums::BinOp;
         use crate::ty::Value;
         let input = two_attr_source();
-        let predicate = Predicate::Expr(Expression::BinOp(
-            BinOp::Gt,
-            alloc::boxed::Box::new(Expression::Attr(attr("id"))),
-            alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
-        ));
-        let op = Op::restrict(input, predicate).unwrap();
+        let bool_expr = BoolExpression::try_new(
+            input.schema(),
+            Expression::BinOp(
+                BinOp::Gt,
+                alloc::boxed::Box::new(Expression::Attr(attr("id"))),
+                alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
+            ),
+        )
+        .unwrap();
+        let op =
+            Op::restrict(input, Predicate::Expr(bool_expr)).unwrap();
         assert_eq!(op.schema().cardinality(), 2);
     }
 
     #[test]
-    fn op_restrict_rejects_non_bool_predicate() {
+    fn op_restrict_rejects_predicate_from_incompatible_schema() {
         use super::OpError;
-        use crate::expression::{Expression, Predicate};
-        use crate::ty::Value;
-        // Lit Int32(0) is not Bool-typed.
-        let predicate = Predicate::Expr(Expression::Lit(Value::Int32(0)));
-        let result = Op::restrict(two_attr_source(), predicate);
-        let Err(OpError::Infer(_)) = result else {
-            unreachable!();
-        };
-    }
-
-    #[test]
-    fn op_restrict_rejects_unknown_attr_in_predicate() {
-        use super::OpError;
-        use crate::expression::{Expression, Predicate};
-        use crate::op_enums::BinOp;
-        use crate::ty::Value;
-        // `age` is not in two_attr_source (which has id / name).
-        let predicate = Predicate::Expr(Expression::BinOp(
-            BinOp::Gt,
-            alloc::boxed::Box::new(Expression::Attr(attr("age"))),
-            alloc::boxed::Box::new(Expression::Lit(Value::Int32(0))),
-        ));
-        let result = Op::restrict(two_attr_source(), predicate);
+        use crate::expression::{BoolExpression, Expression, Predicate};
+        // Build BoolExpression against a schema that has 'flag: Bool'
+        // — Op::restrict's input schema (two_attr_source: id / name)
+        // does not, so re-verification on use fails.
+        let other_schema = Schema::try_new(vec![Attribute {
+            name: attr("flag"),
+            ty: Type::Bool,
+        }])
+        .unwrap();
+        let bool_expr = BoolExpression::try_new(
+            &other_schema,
+            Expression::Attr(attr("flag")),
+        )
+        .unwrap();
+        let result = Op::restrict(
+            two_attr_source(),
+            Predicate::Expr(bool_expr),
+        );
         let Err(OpError::Infer(_)) = result else {
             unreachable!();
         };

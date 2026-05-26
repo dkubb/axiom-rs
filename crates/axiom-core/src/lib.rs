@@ -29,7 +29,9 @@ pub use constraint::{
     AttributeConstraint, AttributeConstraintError, ConstraintSet,
     ConstraintSetError, RowConstraint,
 };
-pub use expression::{Expression, InListValues, OpaqueId, Predicate};
+pub use expression::{
+    BoolExpression, Expression, InListValues, OpaqueId, Predicate,
+};
 pub use infer::{agg_ty, infer as infer_type, infer_value, InferError};
 pub use identifier::{
     AttributeName, AttributeNameError, Pattern, PatternError,
