@@ -1,19 +1,19 @@
 //! `Schema` and `Attribute`.
 //!
 //! A schema's header is a `Vec<Attribute>` refined by whittle's
-//! `LenItems<1, MAX_SCHEMA_ATTRIBUTES>`. Per-attribute-name
-//! uniqueness is enforced by `Schema::try_new` after the whittle
-//! length-check passes; the uniqueness primitive
-//! (`UniqueByKey<AttributeName>`) lands in whittle in a later
-//! commit, at which point this manual check can be lifted into the
-//! refinement chain itself.
+//! `LenItems<1, MAX_SCHEMA_ATTRIBUTES>` (length) composed via
+//! `whittle::And` with `UniqueByKey<Attribute, AttributeKey>`
+//! (per-attribute-name uniqueness). The entire header invariant is
+//! a single whittle refinement; there is no manual second pass.
 
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use thiserror::Error;
-use whittle::primitive::{CollectionError, LenItems, NumericError, Within};
-use whittle::Refined;
+use whittle::primitive::{
+    CollectionError, KeyOf, LenItems, NumericError, UniqueByKey, Within,
+};
+use whittle::{And, AndError, Refined};
 
 use crate::identifier::AttributeName;
 use crate::limits::MAX_SCHEMA_ATTRIBUTES;
@@ -36,62 +36,50 @@ pub struct Attribute {
     pub ty: Type,
 }
 
-/// Relation header: bounded ordered list of `Attribute`s with
-/// unique attribute names. Whittle enforces the length bound;
-/// uniqueness is enforced by `try_new` until a `UniqueByKey`
-/// primitive lands.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Schema {
-    attributes:
-        Refined<Vec<Attribute>, LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>>,
-}
+/// Key extractor that pulls an `AttributeName` out of an `Attribute`
+/// for uniqueness checks.
+pub struct AttributeKey(PhantomData<()>);
 
-/// Constructor error for `Schema`.
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum SchemaError {
-    /// Underlying length-bound rejection from whittle.
-    #[error("{0}")]
-    Length(#[source] CollectionError),
-    /// Two attributes share the same name. Uniqueness is enforced
-    /// by `try_new`; this variant will go away once whittle's
-    /// `UniqueByKey<AttributeName>` lands.
-    #[error("duplicate attribute name: {name}")]
-    DuplicateAttribute {
-        /// The repeated name.
-        name: AttributeName,
-    },
-}
-
-impl From<CollectionError> for SchemaError {
-    fn from(err: CollectionError) -> Self {
-        Self::Length(err)
+impl KeyOf<Attribute> for AttributeKey {
+    type Key = AttributeName;
+    fn key_of(attr: &Attribute) -> AttributeName {
+        attr.name.clone()
     }
 }
+
+// The composite rule: length-bound first, then per-attribute-name
+// uniqueness. Both inner rules report through `CollectionError`, so
+// the wrapping `AndError` carries the same error type on both sides.
+type SchemaHeaderRule = And<
+    LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>,
+    UniqueByKey<Attribute, AttributeKey>,
+>;
+
+/// Relation header: bounded ordered list of `Attribute`s with
+/// unique attribute names. The entire invariant is a single
+/// `whittle::Refined` value — there is no manual second pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Schema {
+    attributes: Refined<Vec<Attribute>, SchemaHeaderRule>,
+}
+
+/// Constructor error for `Schema`. Wraps whittle's
+/// `AndError<CollectionError, CollectionError>` under the axiom-rs
+/// vocabulary so call sites need not name the rule type.
+pub type SchemaError = AndError<CollectionError, CollectionError>;
 
 impl Schema {
     /// Validate `raw` and wrap.
     ///
     /// # Errors
     ///
-    /// Returns `SchemaError::Length` when `raw` is empty or exceeds
-    /// `MAX_SCHEMA_ATTRIBUTES`. Returns
-    /// `SchemaError::DuplicateAttribute` when two attributes share
-    /// the same name.
+    /// Returns `AndError::Left(CollectionError::LenOutOfRange ..)`
+    /// when `raw` is empty or exceeds `MAX_SCHEMA_ATTRIBUTES`.
+    /// Returns `AndError::Right(CollectionError::DuplicateKey ..)`
+    /// when two attributes share the same name.
     #[inline]
     pub fn try_new(raw: Vec<Attribute>) -> Result<Self, SchemaError> {
-        // Run whittle's length check first so an empty/over-length
-        // attribute list rejects before the uniqueness pass.
-        let attributes = Refined::try_new(raw)?;
-        // Uniqueness pass — pulled out of whittle for now.
-        let mut seen: BTreeSet<&AttributeName> = BTreeSet::new();
-        for attr in attributes.as_inner() {
-            if !seen.insert(&attr.name) {
-                return Err(SchemaError::DuplicateAttribute {
-                    name: attr.name.clone(),
-                });
-            }
-        }
-        Ok(Self { attributes })
+        Refined::try_new(raw).map(|attributes| Self { attributes })
     }
 
     /// Borrow the attribute list.
@@ -118,9 +106,11 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use whittle::primitive::CollectionError;
+    use whittle::AndError;
+
     use super::{
         Attribute, Schema, SchemaCardinality, SchemaCardinalityError,
-        SchemaError,
     };
     use crate::identifier::AttributeName;
     use crate::limits::MAX_SCHEMA_ATTRIBUTES;
@@ -177,7 +167,10 @@ mod tests {
     #[test]
     fn empty_schema_rejected_by_length_check() {
         let result = Schema::try_new(Vec::new());
-        assert!(matches!(result.unwrap_err(), SchemaError::Length(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            AndError::Left(CollectionError::LenOutOfRange { actual: 0 }),
+        ));
     }
 
     #[test]
@@ -186,10 +179,9 @@ mod tests {
             attr("id", Type::Int64),
             attr("id", Type::String),
         ]);
-        let err = result.unwrap_err();
-        let SchemaError::DuplicateAttribute { name } = err else {
-            unreachable!("expected DuplicateAttribute, got {err:?}");
-        };
-        assert_eq!(name.as_str(), "id");
+        assert!(matches!(
+            result.unwrap_err(),
+            AndError::Right(CollectionError::DuplicateKey { index: 1 }),
+        ));
     }
 }
