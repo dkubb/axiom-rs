@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+mod canonical;
 mod expression;
 mod identifier;
 mod join;
@@ -21,6 +22,7 @@ mod schema;
 mod source;
 mod ty;
 
+pub use canonical::{CanonicalPredicate, CanonicalPredicateError};
 pub use expression::{Expression, OpaqueId, Predicate};
 pub use identifier::{
     AttributeName, AttributeNameError, Pattern, PatternError,
