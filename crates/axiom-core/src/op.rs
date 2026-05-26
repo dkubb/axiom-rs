@@ -189,6 +189,15 @@ pub enum OpError {
     #[error("set operator operands have non-matching schemas")]
     SchemaMismatch,
 
+    /// Equi-join referenced an attribute on one side but its type
+    /// did not match the corresponding attribute on the other side.
+    #[error("equi-join attribute `{attribute}` has mismatched types on the two sides")]
+    JoinTypeMismatch {
+        /// The colliding attribute name (the side reported is the
+        /// side that introduced the mismatch).
+        attribute: AttributeName,
+    },
+
     /// `Product` requires the two operands' schemas to be disjoint.
     #[error("attribute `{attribute}` is present in both operands of a product")]
     DuplicateAcrossOperands {
@@ -382,6 +391,94 @@ impl Op {
         })
     }
 
+    /// Join two relations.
+    ///
+    /// Output schema depends on `on`:
+    ///
+    /// - `JoinOn::Natural`: equates every attribute that shares a
+    ///   name between the two sides (their types must match) and
+    ///   coalesces them in the output. Output schema is left's
+    ///   attributes followed by right's minus the shared names.
+    /// - `JoinOn::Equi(pairs)`: each `(l, r)` pair must reference
+    ///   an attribute that exists on its side and the two types
+    ///   must agree. Schema is left's attributes followed by
+    ///   right's (which must be name-disjoint, like `product`;
+    ///   the equality is enforced at runtime, not by coalescing).
+    /// - `JoinOn::Theta(pred)`: same shape as `Equi` (name-disjoint
+    ///   concatenation). The predicate is opaque to the smart
+    ///   constructor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownAttribute` (equi-join references a missing
+    /// attribute), `JoinTypeMismatch` (equi-join or natural-join
+    /// joined columns have differing types), or
+    /// `DuplicateAcrossOperands` (theta/equi-join produced a name
+    /// collision in the output).
+    pub fn join(
+        left: Self,
+        right: Self,
+        kind: JoinKind,
+        on: JoinOn,
+    ) -> Result<Self, OpError> {
+        use crate::schema::{Attribute, Schema};
+        let schema = match &on {
+            JoinOn::Natural => {
+                let mut shared: Vec<AttributeName> = Vec::new();
+                for l in left.schema().attributes() {
+                    if let Some(r) = right.schema().find(&l.name) {
+                        if r.ty != l.ty {
+                            return Err(OpError::JoinTypeMismatch {
+                                attribute: l.name.clone(),
+                            });
+                        }
+                        shared.push(l.name.clone());
+                    }
+                }
+                let mut combined: Vec<Attribute> =
+                    left.schema().attributes().to_vec();
+                for r in right.schema().attributes() {
+                    if !shared.contains(&r.name) {
+                        combined.push(r.clone());
+                    }
+                }
+                Schema::try_new(combined).map_err(OpError::Schema)?
+            }
+            JoinOn::Equi(pairs) => {
+                for pair in pairs.as_slice() {
+                    let lt = left
+                        .schema()
+                        .find(&pair.left)
+                        .ok_or_else(|| OpError::UnknownAttribute {
+                            attribute: pair.left.clone(),
+                        })?;
+                    let rt = right
+                        .schema()
+                        .find(&pair.right)
+                        .ok_or_else(|| OpError::UnknownAttribute {
+                            attribute: pair.right.clone(),
+                        })?;
+                    if lt.ty != rt.ty {
+                        return Err(OpError::JoinTypeMismatch {
+                            attribute: pair.left.clone(),
+                        });
+                    }
+                }
+                concat_disjoint_schemas(&left, &right)?
+            }
+            JoinOn::Theta(_) => concat_disjoint_schemas(&left, &right)?,
+        };
+        Ok(Self {
+            kind: OpKind::Join {
+                left: Box::new(left),
+                right: Box::new(right),
+                kind,
+                on,
+            },
+            schema,
+        })
+    }
+
     /// Cartesian product. Output schema is the concatenation of the
     /// operands' attributes. Attribute names must be disjoint —
     /// otherwise the resulting header would violate the per-name
@@ -392,21 +489,7 @@ impl Op {
     /// Returns `DuplicateAcrossOperands` if any attribute name in
     /// `right`'s schema is also present in `left`'s.
     pub fn product(left: Self, right: Self) -> Result<Self, OpError> {
-        use crate::schema::{Attribute, Schema};
-        for r in right.schema().attributes() {
-            if left.schema().contains(&r.name) {
-                return Err(OpError::DuplicateAcrossOperands {
-                    attribute: r.name.clone(),
-                });
-            }
-        }
-        let mut combined: Vec<Attribute> = Vec::with_capacity(
-            left.schema().attributes().len()
-                + right.schema().attributes().len(),
-        );
-        combined.extend(left.schema().attributes().iter().cloned());
-        combined.extend(right.schema().attributes().iter().cloned());
-        let schema = Schema::try_new(combined).map_err(OpError::Schema)?;
+        let schema = concat_disjoint_schemas(&left, &right)?;
         Ok(Self {
             kind: OpKind::Product {
                 left: Box::new(left),
@@ -511,6 +594,30 @@ pub enum OpKind {
         attrs: AttributeSet,
         into: AttributeName,
     },
+}
+
+// Helper: concatenate two operands' schemas into a single header,
+// requiring name disjointness. Shared by `Op::product`, the
+// equi-join branch of `Op::join`, and the theta-join branch.
+fn concat_disjoint_schemas(
+    left: &Op,
+    right: &Op,
+) -> Result<crate::schema::Schema, OpError> {
+    use crate::schema::{Attribute, Schema};
+    for r in right.schema().attributes() {
+        if left.schema().contains(&r.name) {
+            return Err(OpError::DuplicateAcrossOperands {
+                attribute: r.name.clone(),
+            });
+        }
+    }
+    let mut combined: Vec<Attribute> = Vec::with_capacity(
+        left.schema().attributes().len()
+            + right.schema().attributes().len(),
+    );
+    combined.extend(left.schema().attributes().iter().cloned());
+    combined.extend(right.schema().attributes().iter().cloned());
+    Schema::try_new(combined).map_err(OpError::Schema)
 }
 
 #[cfg(test)]
@@ -774,5 +881,133 @@ mod tests {
             unreachable!();
         };
         assert_eq!(attribute.as_str(), "id");
+    }
+
+    // ─── Join. ───────────────────────────────────────────────────
+
+    fn right_orders_source() -> Op {
+        Op::source(Source::Table {
+            schema: Schema::try_new(vec![
+                Attribute { name: attr("order_id"), ty: Type::Int64 },
+                Attribute { name: attr("user_id"), ty: Type::Int64 },
+            ])
+            .unwrap(),
+            name: TableName::try_new("orders".to_string()).unwrap(),
+        })
+    }
+
+    #[test]
+    fn op_join_natural_coalesces_shared_column() {
+        // Left has (id, name); right has (id, total).
+        let right = Op::source(Source::Table {
+            schema: Schema::try_new(vec![
+                Attribute { name: attr("id"), ty: Type::Int64 },
+                Attribute { name: attr("total"), ty: Type::Int64 },
+            ])
+            .unwrap(),
+            name: TableName::try_new("orders".to_string()).unwrap(),
+        });
+        let op = Op::join(
+            two_attr_source(),
+            right,
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Natural,
+        )
+        .unwrap();
+        let names: alloc::vec::Vec<_> = op
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id", "name", "total"]);
+    }
+
+    #[test]
+    fn op_join_natural_rejects_type_mismatch_on_shared() {
+        use super::OpError;
+        // Left has id: Int64; right's id is String.
+        let right = Op::source(Source::Table {
+            schema: Schema::try_new(vec![Attribute {
+                name: attr("id"),
+                ty: Type::String,
+            }])
+            .unwrap(),
+            name: TableName::try_new("other".to_string()).unwrap(),
+        });
+        let result = Op::join(
+            two_attr_source(),
+            right,
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Natural,
+        );
+        let Err(OpError::JoinTypeMismatch { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "id");
+    }
+
+    #[test]
+    fn op_join_equi_concatenates_when_disjoint() {
+        let pairs = crate::join::EquiPairs::try_new(vec![
+            crate::join::EquiPair {
+                left: attr("id"),
+                right: attr("user_id"),
+            },
+        ])
+        .unwrap();
+        let op = Op::join(
+            two_attr_source(),
+            right_orders_source(),
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Equi(pairs),
+        )
+        .unwrap();
+        assert_eq!(op.schema().cardinality(), 4);
+    }
+
+    #[test]
+    fn op_join_equi_rejects_unknown_attr() {
+        use super::OpError;
+        let pairs = crate::join::EquiPairs::try_new(vec![
+            crate::join::EquiPair {
+                left: attr("missing"),
+                right: attr("user_id"),
+            },
+        ])
+        .unwrap();
+        let result = Op::join(
+            two_attr_source(),
+            right_orders_source(),
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Equi(pairs),
+        );
+        let Err(OpError::UnknownAttribute { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "missing");
+    }
+
+    #[test]
+    fn op_join_equi_rejects_type_mismatch() {
+        use super::OpError;
+        // Left.name: String, right.user_id: Int64 — mismatched.
+        let pairs = crate::join::EquiPairs::try_new(vec![
+            crate::join::EquiPair {
+                left: attr("name"),
+                right: attr("user_id"),
+            },
+        ])
+        .unwrap();
+        let result = Op::join(
+            two_attr_source(),
+            right_orders_source(),
+            crate::op_enums::JoinKind::Inner,
+            crate::join::JoinOn::Equi(pairs),
+        );
+        let Err(OpError::JoinTypeMismatch { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "name");
     }
 }
