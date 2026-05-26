@@ -202,6 +202,24 @@ pub enum OpError {
     #[error("type inference: {0}")]
     Infer(#[source] crate::infer::InferError),
 
+    /// `Unnest` / `Modify` reached an attribute whose type is not a
+    /// nested relation.
+    #[error("path target attribute `{attribute}` is not a nested relation")]
+    NotARelation {
+        /// The offending attribute name.
+        attribute: AttributeName,
+    },
+
+    /// `Unnest` / `Modify` was given a path shape this version of
+    /// the constructor does not yet support.
+    ///
+    /// V0 supports lens paths of the form `[Field(name)]` — a
+    /// single top-level field reaching a nested relation. Deeper
+    /// or traversal-kinded paths land as the path-walking schema
+    /// helper is extended.
+    #[error("path shape not yet supported by this constructor")]
+    UnsupportedPathShape,
+
     /// `Product` requires the two operands' schemas to be disjoint.
     #[error("attribute `{attribute}` is present in both operands of a product")]
     DuplicateAcrossOperands {
@@ -368,6 +386,69 @@ impl Op {
                 input: Box::new(input),
                 name,
                 expr,
+            },
+            schema,
+        })
+    }
+
+    /// Flatten a nested-relation column.
+    ///
+    /// V0 supports `path = AnyPath::Lens([Field(name)])` reaching a
+    /// top-level `Type::Relation(sub)` attribute. The column is
+    /// replaced in the output header by the attributes of the
+    /// nested schema (in their original order).
+    ///
+    /// Deeper paths and array unnest land once the path-walking
+    /// schema helper is generalised — both raise
+    /// `OpError::UnsupportedPathShape` for now.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnsupportedPathShape` for any path that is not a
+    /// single-field lens, `UnknownAttribute` if the named
+    /// attribute is missing from `input.schema()`, `NotARelation`
+    /// if it does not have a `Type::Relation` shape, and `Schema`
+    /// if the resulting header violates an invariant (e.g. a
+    /// nested attribute name collides with a sibling).
+    pub fn unnest(
+        input: Self,
+        path: AnyPath,
+    ) -> Result<Self, OpError> {
+        use crate::path::PathStep;
+        use crate::schema::{Attribute, Schema};
+        use crate::ty::Type;
+
+        let AnyPath::Lens(lens) = &path else {
+            return Err(OpError::UnsupportedPathShape);
+        };
+        let [PathStep::Field(target)] = lens.steps() else {
+            return Err(OpError::UnsupportedPathShape);
+        };
+
+        let attr_ref = input.schema().find(target).ok_or_else(|| {
+            OpError::UnknownAttribute { attribute: target.clone() }
+        })?;
+        let Type::Relation(sub) = &attr_ref.ty else {
+            return Err(OpError::NotARelation {
+                attribute: target.clone(),
+            });
+        };
+
+        let mut flattened: Vec<Attribute> = Vec::new();
+        for a in input.schema().attributes() {
+            if &a.name == target {
+                for inner in sub.attributes() {
+                    flattened.push(inner.clone());
+                }
+            } else {
+                flattened.push(a.clone());
+            }
+        }
+        let schema = Schema::try_new(flattened).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Unnest {
+                input: Box::new(input),
+                path,
             },
             schema,
         })
@@ -1376,5 +1457,75 @@ mod tests {
             .map(|a| a.name.as_str())
             .collect();
         assert_eq!(names, vec!["id", "name"]);
+    }
+
+    // ─── Unnest. ─────────────────────────────────────────────────
+
+    fn nested_source() -> Op {
+        // Build via Op::nest so the nested-relation shape is
+        // identical to what a user would produce.
+        let attrs =
+            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        Op::nest(three_attr_source(), attrs, attr("profile")).unwrap()
+    }
+
+    #[test]
+    fn op_unnest_flattens_nested_relation() {
+        use crate::path::{AnyPath, LensPath, PathStep};
+        let path = AnyPath::Lens(
+            LensPath::try_new(vec![PathStep::Field(attr("profile"))]).unwrap(),
+        );
+        let op = Op::unnest(nested_source(), path).unwrap();
+        let names: alloc::vec::Vec<_> = op
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id", "name", "city"]);
+    }
+
+    #[test]
+    fn op_unnest_rejects_traversal_path() {
+        use super::OpError;
+        use crate::path::{AnyPath, PathStep, TraversalPath};
+        let path = AnyPath::Traversal(
+            TraversalPath::try_new(vec![
+                PathStep::Field(attr("profile")),
+                PathStep::Each,
+            ])
+            .unwrap(),
+        );
+        let result = Op::unnest(nested_source(), path);
+        assert_eq!(result.unwrap_err(), OpError::UnsupportedPathShape);
+    }
+
+    #[test]
+    fn op_unnest_rejects_unknown_attr() {
+        use super::OpError;
+        use crate::path::{AnyPath, LensPath, PathStep};
+        let path = AnyPath::Lens(
+            LensPath::try_new(vec![PathStep::Field(attr("missing"))]).unwrap(),
+        );
+        let result = Op::unnest(nested_source(), path);
+        let Err(OpError::UnknownAttribute { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "missing");
+    }
+
+    #[test]
+    fn op_unnest_rejects_scalar_target() {
+        use super::OpError;
+        use crate::path::{AnyPath, LensPath, PathStep};
+        // three_attr_source has `id` as Int64 — not a relation.
+        let path = AnyPath::Lens(
+            LensPath::try_new(vec![PathStep::Field(attr("id"))]).unwrap(),
+        );
+        let result = Op::unnest(three_attr_source(), path);
+        let Err(OpError::NotARelation { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "id");
     }
 }
