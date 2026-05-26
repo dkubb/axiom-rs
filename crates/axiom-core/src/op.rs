@@ -373,6 +373,69 @@ impl Op {
         })
     }
 
+    /// Nest a subset of attributes into a single nested-relation
+    /// column.
+    ///
+    /// Every name in `attrs` is removed from the output header;
+    /// a new attribute `into` of type `Type::Relation(sub_schema)`
+    /// is appended, where `sub_schema` is the header carrying just
+    /// the nested attributes (in their original order).
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownAttribute` if any name in `attrs` is missing
+    /// from `input.schema()`, `AttributeAlreadyExists` if `into`
+    /// collides with an attribute that is not being nested, and
+    /// `Schema` for the nested-header or output-header invariants.
+    pub fn nest(
+        input: Self,
+        attrs: AttributeSet,
+        into: AttributeName,
+    ) -> Result<Self, OpError> {
+        use crate::schema::{Attribute, Schema};
+        use crate::ty::Type;
+
+        let nested_names = attrs.as_slice();
+        let mut nested: Vec<Attribute> =
+            Vec::with_capacity(nested_names.len());
+        for name in nested_names {
+            let attr = input.schema().find(name).ok_or_else(|| {
+                OpError::UnknownAttribute { attribute: name.clone() }
+            })?;
+            nested.push(attr.clone());
+        }
+        let sub_schema = Schema::try_new(nested).map_err(OpError::Schema)?;
+
+        if input.schema().contains(&into)
+            && !nested_names.contains(&into)
+        {
+            return Err(OpError::AttributeAlreadyExists {
+                attribute: into,
+            });
+        }
+
+        let mut remaining: Vec<Attribute> = input
+            .schema()
+            .attributes()
+            .iter()
+            .filter(|a| !nested_names.contains(&a.name))
+            .cloned()
+            .collect();
+        remaining.push(Attribute {
+            name: into.clone(),
+            ty: Type::Relation(Box::new(sub_schema)),
+        });
+        let schema = Schema::try_new(remaining).map_err(OpError::Schema)?;
+        Ok(Self {
+            kind: OpKind::Nest {
+                input: Box::new(input),
+                attrs,
+                into,
+            },
+            schema,
+        })
+    }
+
     /// Group the input by `by` and compute the named aggregates.
     ///
     /// The output schema is the by-attributes (with their input
@@ -1235,5 +1298,83 @@ mod tests {
         let Err(OpError::Infer(_)) = result else {
             unreachable!();
         };
+    }
+
+    // ─── Nest. ───────────────────────────────────────────────────
+
+    fn three_attr_source() -> Op {
+        Op::source(Source::Table {
+            schema: Schema::try_new(vec![
+                Attribute { name: attr("id"), ty: Type::Int64 },
+                Attribute { name: attr("name"), ty: Type::String },
+                Attribute { name: attr("city"), ty: Type::String },
+            ])
+            .unwrap(),
+            name: TableName::try_new("users".to_string()).unwrap(),
+        })
+    }
+
+    #[test]
+    fn op_nest_bundles_attributes_under_target_name() {
+        let attrs =
+            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        let op = Op::nest(three_attr_source(), attrs, attr("profile")).unwrap();
+        let names: alloc::vec::Vec<_> = op
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id", "profile"]);
+        let profile = op.schema().find(&attr("profile")).unwrap();
+        let crate::ty::Type::Relation(sub) = &profile.ty else {
+            unreachable!();
+        };
+        let sub_names: alloc::vec::Vec<_> = sub
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(sub_names, vec!["name", "city"]);
+    }
+
+    #[test]
+    fn op_nest_rejects_unknown_attr() {
+        use super::OpError;
+        let attrs = AttributeSet::try_new(vec![attr("missing")]).unwrap();
+        let result = Op::nest(three_attr_source(), attrs, attr("nested"));
+        let Err(OpError::UnknownAttribute { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "missing");
+    }
+
+    #[test]
+    fn op_nest_rejects_into_colliding_with_kept_attr() {
+        use super::OpError;
+        let attrs =
+            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        let result = Op::nest(three_attr_source(), attrs, attr("id"));
+        let Err(OpError::AttributeAlreadyExists { attribute }) = result else {
+            unreachable!();
+        };
+        assert_eq!(attribute.as_str(), "id");
+    }
+
+    #[test]
+    fn op_nest_allows_into_reusing_a_nested_name() {
+        // When 'name' is itself being nested, reusing 'name' as
+        // the target name does not collide (the old 'name' attr is
+        // removed before the new nested attr is appended).
+        let attrs =
+            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        let op = Op::nest(three_attr_source(), attrs, attr("name")).unwrap();
+        let names: alloc::vec::Vec<_> = op
+            .schema()
+            .attributes()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id", "name"]);
     }
 }
