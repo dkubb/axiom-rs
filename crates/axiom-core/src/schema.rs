@@ -9,7 +9,6 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use thiserror::Error;
 use whittle::primitive::{
     CollectionError, KeyOf, LenItems, NumericError, UniqueByKey, Within,
 };
