@@ -9,50 +9,29 @@
 
 use alloc::vec::Vec;
 
-use thiserror::Error;
 use whittle::primitive::{CollectionError, LenItems};
-use whittle::Refined;
+use whittle::refinement;
 
 use crate::limits::MAX_SCHEMA_ATTRIBUTES;
 use crate::ty::Value;
 
-/// Length-bounded row: 1..=`MAX_SCHEMA_ATTRIBUTES` values.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row(
-    Refined<Vec<Value>, LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>>,
-);
+type RowRule = LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>;
+
+refinement! {
+    /// Length-bounded row: 1..=`MAX_SCHEMA_ATTRIBUTES` values.
+    #[derive(Debug, Clone, PartialEq)]
+    pub Row: Vec<Value>, RowRule;
+}
 
 /// Constructor error for `Row`.
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum RowError {
-    /// Underlying length-bound rejection from whittle.
-    #[error("{0}")]
-    Length(#[source] CollectionError),
-}
-
-impl From<CollectionError> for RowError {
-    fn from(err: CollectionError) -> Self {
-        Self::Length(err)
-    }
-}
+pub type RowError = CollectionError;
 
 impl Row {
-    /// Validate `raw` and wrap.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RowError::Length` when `raw` is empty or exceeds
-    /// `MAX_SCHEMA_ATTRIBUTES` values.
-    #[inline]
-    pub fn try_new(raw: Vec<Value>) -> Result<Self, RowError> {
-        Refined::try_new(raw).map(Self).map_err(Into::into)
-    }
-
     /// Borrow the inner value vector.
     #[must_use]
     #[inline]
     pub const fn as_slice(&self) -> &[Value] {
-        self.0.as_inner().as_slice()
+        self.as_inner().as_slice()
     }
 
     /// Number of values in the row. Never zero — the rule's lower
@@ -60,7 +39,7 @@ impl Row {
     #[must_use]
     #[inline]
     pub const fn len(&self) -> usize {
-        self.0.as_inner().len()
+        self.as_inner().len()
     }
 
     /// `false` by construction. Present to satisfy
@@ -92,6 +71,9 @@ mod tests {
     #[test]
     fn empty_row_rejected() {
         let result = Row::try_new(Vec::new());
-        assert!(matches!(result.unwrap_err(), RowError::Length(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RowError::LenOutOfRange { actual: 0 },
+        ));
     }
 }

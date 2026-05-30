@@ -15,7 +15,7 @@ use thiserror::Error;
 use whittle::primitive::{
     CollectionError, KeyOf, LenItems, UniqueByKey,
 };
-use whittle::{And, AndError, Refined};
+use whittle::{And, Refined};
 
 use crate::canonical::CanonicalPredicate;
 use crate::identifier::AttributeName;
@@ -192,11 +192,22 @@ pub enum ConstraintSetError {
     PerRow(#[source] CollectionError),
 }
 
-impl From<AndError<CollectionError, CollectionError>> for ConstraintSetError {
-    fn from(err: AndError<CollectionError, CollectionError>) -> Self {
+impl From<CollectionError> for ConstraintSetError {
+    fn from(err: CollectionError) -> Self {
+        // Both inner rules of `AttrConstraintsRule` report through
+        // `CollectionError`, so the composition's error is the flat
+        // enum: a length failure surfaces as `LenOutOfRange`, a
+        // per-attribute uniqueness failure as `DuplicateKey`.
         match err {
-            AndError::Left(inner) => Self::PerAttributeLength(inner),
-            AndError::Right(inner) => Self::PerAttributeDuplicate(inner),
+            CollectionError::LenOutOfRange { .. } => {
+                Self::PerAttributeLength(err)
+            }
+            CollectionError::DuplicateKey { .. } => {
+                Self::PerAttributeDuplicate(err)
+            }
+            _ => unreachable!(
+                "AttrConstraintsRule emits only LenOutOfRange / DuplicateKey"
+            ),
         }
     }
 }

@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use whittle::primitive::{
     CollectionError, IdentityKey, LenItems, UniqueByKey,
 };
-use whittle::{And, AndError, Refined};
+use whittle::{And, Refined};
 
 use crate::expression::{Expression, Predicate};
 use crate::identifier::AttributeName;
@@ -40,22 +40,53 @@ type AttributeSetRule = And<
 pub struct AttributeSet(Refined<Vec<AttributeName>, AttributeSetRule>);
 
 /// Constructor error for `AttributeSet`.
-pub type AttributeSetError = AndError<CollectionError, CollectionError>;
+///
+/// Flat domain-shaped enum: the underlying composition is
+/// `And<LenItems, UniqueByKey>`. Both inner rules report through
+/// `CollectionError`, so the composition's error is `CollectionError`
+/// directly — no positional `Left` / `Right` wrapping leaks.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AttributeSetError {
+    /// Attribute count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
+    #[error("attribute-set count out of range (actual: {actual})")]
+    AttributeCount {
+        /// Observed attribute count.
+        actual: usize,
+    },
+
+    /// Two entries shared a name. The reported index is the second
+    /// occurrence (the first wins).
+    #[error("duplicate attribute name at index {index}")]
+    DuplicateAttribute {
+        /// Position of the duplicate (the second occurrence).
+        index: usize,
+    },
+}
 
 impl AttributeSet {
-    /// Validate `raw` (non-empty, bounded, no duplicate names) and
-    /// wrap.
+    /// Validate `attrs` against the attribute-set rule and wrap.
     ///
     /// # Errors
     ///
-    /// Returns `AndError::Left` on length-bound violation,
-    /// `AndError::Right(CollectionError::DuplicateKey)` on a
-    /// duplicate name.
+    /// Returns `AttributeCount` if the list length is outside
+    /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateAttribute` if two
+    /// entries share a name.
     #[inline]
     pub fn try_new(
-        raw: Vec<AttributeName>,
+        attrs: Vec<AttributeName>,
     ) -> Result<Self, AttributeSetError> {
-        Refined::try_new(raw).map(Self)
+        Refined::try_new(attrs).map(Self).map_err(|err| match err {
+            CollectionError::LenOutOfRange { actual } => {
+                AttributeSetError::AttributeCount { actual }
+            }
+            CollectionError::DuplicateKey { index } => {
+                AttributeSetError::DuplicateAttribute { index }
+            }
+            _ => unreachable!(
+                "AttributeSetRule emits only LenOutOfRange / DuplicateKey"
+            ),
+        })
     }
 
     /// Borrow the underlying name list.
@@ -63,6 +94,13 @@ impl AttributeSet {
     #[inline]
     pub const fn as_slice(&self) -> &[AttributeName] {
         self.0.as_inner().as_slice()
+    }
+
+    /// Consume the wrapper and return the inner name list.
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> Vec<AttributeName> {
+        self.0.into_inner()
     }
 }
 
@@ -78,21 +116,52 @@ type GroupingSetRule = And<
 pub struct GroupingSet(Refined<Vec<AttributeName>, GroupingSetRule>);
 
 /// Constructor error for `GroupingSet`.
-pub type GroupingSetError = AndError<CollectionError, CollectionError>;
+///
+/// Flat domain-shaped enum mirroring `AttributeSet`'s shape (the
+/// empty set is admissible here; `GroupCount` still fires when the
+/// list exceeds `MAX_SCHEMA_ATTRIBUTES`).
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GroupingSetError {
+    /// Grouping-key count fell outside `0..=MAX_SCHEMA_ATTRIBUTES`.
+    #[error("grouping-set count out of range (actual: {actual})")]
+    GroupCount {
+        /// Observed grouping-key count.
+        actual: usize,
+    },
+
+    /// Two entries shared a grouping-key name. The reported index
+    /// is the second occurrence (the first wins).
+    #[error("duplicate grouping attribute at index {index}")]
+    DuplicateAttribute {
+        /// Position of the duplicate (the second occurrence).
+        index: usize,
+    },
+}
 
 impl GroupingSet {
-    /// Validate `raw` (bounded, no duplicate names; empty is OK).
+    /// Validate `keys` against the grouping-set rule and wrap.
     ///
     /// # Errors
     ///
-    /// Returns `AndError::Left` on length-bound violation,
-    /// `AndError::Right(CollectionError::DuplicateKey)` on duplicate
-    /// names.
+    /// Returns `GroupCount` if the list length is outside
+    /// `0..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateAttribute` if two
+    /// entries share a name.
     #[inline]
     pub fn try_new(
-        raw: Vec<AttributeName>,
+        keys: Vec<AttributeName>,
     ) -> Result<Self, GroupingSetError> {
-        Refined::try_new(raw).map(Self)
+        Refined::try_new(keys).map(Self).map_err(|err| match err {
+            CollectionError::LenOutOfRange { actual } => {
+                GroupingSetError::GroupCount { actual }
+            }
+            CollectionError::DuplicateKey { index } => {
+                GroupingSetError::DuplicateAttribute { index }
+            }
+            _ => unreachable!(
+                "GroupingSetRule emits only LenOutOfRange / DuplicateKey"
+            ),
+        })
     }
 
     /// Borrow the underlying name list.
@@ -100,6 +169,13 @@ impl GroupingSet {
     #[inline]
     pub const fn as_slice(&self) -> &[AttributeName] {
         self.0.as_inner().as_slice()
+    }
+
+    /// Consume the wrapper and return the inner name list.
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> Vec<AttributeName> {
+        self.0.into_inner()
     }
 }
 
@@ -126,21 +202,52 @@ impl whittle::primitive::KeyOf<NamedAgg> for NamedAggKey {
 pub struct NamedAggSet(Refined<Vec<NamedAgg>, NamedAggSetRule>);
 
 /// Constructor error for `NamedAggSet`.
-pub type NamedAggSetError = AndError<CollectionError, CollectionError>;
+///
+/// Flat domain-shaped enum: uniqueness is on each aggregate's
+/// output attribute name, so a duplicate is reported as
+/// `DuplicateOutputName`.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NamedAggSetError {
+    /// Aggregate count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
+    #[error("named-aggregate count out of range (actual: {actual})")]
+    AggregateCount {
+        /// Observed aggregate count.
+        actual: usize,
+    },
+
+    /// Two aggregates produced the same output attribute name. The
+    /// reported index is the second occurrence (the first wins).
+    #[error("duplicate aggregate output name at index {index}")]
+    DuplicateOutputName {
+        /// Position of the duplicate (the second occurrence).
+        index: usize,
+    },
+}
 
 impl NamedAggSet {
-    /// Validate `raw` and wrap.
+    /// Validate `aggs` against the named-aggregate-set rule and wrap.
     ///
     /// # Errors
     ///
-    /// Returns `AndError::Left` on length-bound violation,
-    /// `AndError::Right(CollectionError::DuplicateKey)` on a
-    /// duplicate output name.
+    /// Returns `AggregateCount` if the list length is outside
+    /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateOutputName` if two
+    /// aggregates share an output name.
     #[inline]
     pub fn try_new(
-        raw: Vec<NamedAgg>,
+        aggs: Vec<NamedAgg>,
     ) -> Result<Self, NamedAggSetError> {
-        Refined::try_new(raw).map(Self)
+        Refined::try_new(aggs).map(Self).map_err(|err| match err {
+            CollectionError::LenOutOfRange { actual } => {
+                NamedAggSetError::AggregateCount { actual }
+            }
+            CollectionError::DuplicateKey { index } => {
+                NamedAggSetError::DuplicateOutputName { index }
+            }
+            _ => unreachable!(
+                "NamedAggSetRule emits only LenOutOfRange / DuplicateKey"
+            ),
+        })
     }
 
     /// Borrow the underlying aggregate list.
@@ -148,6 +255,13 @@ impl NamedAggSet {
     #[inline]
     pub const fn as_slice(&self) -> &[NamedAgg] {
         self.0.as_inner().as_slice()
+    }
+
+    /// Consume the wrapper and return the inner aggregate list.
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> Vec<NamedAgg> {
+        self.0.into_inner()
     }
 }
 
@@ -1032,10 +1146,10 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use whittle::primitive::CollectionError;
-    use whittle::AndError;
-
-    use super::{AttributeSet, GroupingSet, NamedAggSet, Op, OpKind};
+    use super::{
+        AttributeSet, AttributeSetError, GroupingSet, GroupingSetError,
+        NamedAggSet, NamedAggSetError, Op, OpKind,
+    };
     use crate::identifier::{AttributeName, TableName};
     use crate::op_enums::{Agg, NamedAgg};
     use crate::schema::{Attribute, Schema};
@@ -1065,19 +1179,19 @@ mod tests {
     #[test]
     fn attribute_set_rejects_empty() {
         let result = AttributeSet::try_new(Vec::new());
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Left(CollectionError::LenOutOfRange { actual: 0 }),
-        ));
+            AttributeSetError::AttributeCount { actual: 0 },
+        );
     }
 
     #[test]
     fn attribute_set_rejects_duplicate_names() {
         let result = AttributeSet::try_new(vec![attr("a"), attr("a")]);
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Right(CollectionError::DuplicateKey { index: 1 }),
-        ));
+            AttributeSetError::DuplicateAttribute { index: 1 },
+        );
     }
 
     // ─── GroupingSet. ────────────────────────────────────────────
@@ -1091,10 +1205,10 @@ mod tests {
     #[test]
     fn grouping_set_rejects_duplicates() {
         let result = GroupingSet::try_new(vec![attr("k"), attr("k")]);
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Right(CollectionError::DuplicateKey { index: 1 }),
-        ));
+            GroupingSetError::DuplicateAttribute { index: 1 },
+        );
     }
 
     // ─── NamedAggSet. ────────────────────────────────────────────
@@ -1112,10 +1226,10 @@ mod tests {
             },
         ];
         let result = NamedAggSet::try_new(aggs);
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Right(CollectionError::DuplicateKey { index: 1 }),
-        ));
+            NamedAggSetError::DuplicateOutputName { index: 1 },
+        );
     }
 
     // ─── Op constructors. ────────────────────────────────────────

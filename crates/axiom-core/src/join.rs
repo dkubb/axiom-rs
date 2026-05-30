@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 use whittle::primitive::{
     CollectionError, KeyOf, LenItems, UniqueByKey,
 };
-use whittle::{And, AndError, Refined};
+use whittle::{And, Refined};
 
 use crate::expression::Predicate;
 use crate::identifier::AttributeName;
@@ -52,19 +52,51 @@ type EquiPairsRule = And<
 pub struct EquiPairs(Refined<Vec<EquiPair>, EquiPairsRule>);
 
 /// Constructor error for `EquiPairs`.
-pub type EquiPairsError = AndError<CollectionError, CollectionError>;
+///
+/// Flat domain-shaped enum: the underlying composition is
+/// `And<LenItems, UniqueByKey>` keyed on the left attribute name.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EquiPairsError {
+    /// Pair count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
+    #[error("equi-pair count out of range (actual: {actual})")]
+    PairCount {
+        /// Observed pair count.
+        actual: usize,
+    },
+
+    /// Two pairs shared the same left-side attribute. The reported
+    /// index is the second occurrence (the first wins).
+    #[error("duplicate left-side attribute at index {index}")]
+    DuplicateLeftAttribute {
+        /// Position of the duplicate (the second occurrence).
+        index: usize,
+    },
+}
 
 impl EquiPairs {
-    /// Validate `raw` and wrap.
+    /// Validate `pairs` against the equi-pair rule and wrap.
     ///
     /// # Errors
     ///
-    /// Returns `AndError::Left` for length-bound violations,
-    /// `AndError::Right(CollectionError::DuplicateKey)` when the
-    /// same left attribute appears twice.
+    /// Returns `PairCount` if the list length is outside
+    /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateLeftAttribute` if
+    /// two pairs share a left-side attribute.
     #[inline]
-    pub fn try_new(raw: Vec<EquiPair>) -> Result<Self, EquiPairsError> {
-        Refined::try_new(raw).map(Self)
+    pub fn try_new(
+        pairs: Vec<EquiPair>,
+    ) -> Result<Self, EquiPairsError> {
+        Refined::try_new(pairs).map(Self).map_err(|err| match err {
+            CollectionError::LenOutOfRange { actual } => {
+                EquiPairsError::PairCount { actual }
+            }
+            CollectionError::DuplicateKey { index } => {
+                EquiPairsError::DuplicateLeftAttribute { index }
+            }
+            _ => unreachable!(
+                "EquiPairsRule emits only LenOutOfRange / DuplicateKey"
+            ),
+        })
     }
 
     /// Borrow the underlying pair list.
@@ -72,6 +104,13 @@ impl EquiPairs {
     #[inline]
     pub const fn as_slice(&self) -> &[EquiPair] {
         self.0.as_inner().as_slice()
+    }
+
+    /// Consume the wrapper and return the inner pair list.
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> Vec<EquiPair> {
+        self.0.into_inner()
     }
 }
 
@@ -99,10 +138,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use whittle::primitive::CollectionError;
-    use whittle::AndError;
-
-    use super::{EquiPair, EquiPairs};
+    use super::{EquiPair, EquiPairs, EquiPairsError};
     use crate::identifier::AttributeName;
 
     fn attr(name: &str) -> AttributeName {
@@ -129,10 +165,10 @@ mod tests {
     #[test]
     fn equi_pairs_reject_empty() {
         let result = EquiPairs::try_new(Vec::new());
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Left(CollectionError::LenOutOfRange { actual: 0 }),
-        ));
+            EquiPairsError::PairCount { actual: 0 },
+        );
     }
 
     #[test]
@@ -141,9 +177,9 @@ mod tests {
             pair("user_id", "a"),
             pair("user_id", "b"),
         ]);
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Right(CollectionError::DuplicateKey { index: 1 }),
-        ));
+            EquiPairsError::DuplicateLeftAttribute { index: 1 },
+        );
     }
 }

@@ -10,9 +10,8 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use thiserror::Error;
 use whittle::primitive::{CollectionError, KeyOf, LenItems, UniqueByKey};
-use whittle::{And, AndError, Refined};
+use whittle::{And, Refined};
 
 use crate::identifier::AttributeName;
 use crate::limits::MAX_SCHEMA_ATTRIBUTES;
@@ -76,37 +75,53 @@ type OrderKeysRule = And<
 pub struct OrderKeys(Refined<Vec<OrderKey>, OrderKeysRule>);
 
 /// Constructor error for `OrderKeys`.
-#[derive(Debug, Error, PartialEq, Eq)]
+///
+/// Flat domain-shaped enum: the underlying composition is
+/// `And<LenItems, UniqueByKey>`. Both inner rules report through
+/// `CollectionError`, so the composition's error is `CollectionError`
+/// directly — no positional `Left` / `Right` wrapping leaks.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OrderKeysError {
-    /// Length bound failed (empty list or over-length).
-    #[error("{0}")]
-    Length(#[source] CollectionError),
-    /// Two keys reference the same attribute.
-    #[error("{0}")]
-    DuplicateAttribute(#[source] CollectionError),
-}
+    /// Key count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
+    #[error("order-key count out of range (actual: {actual})")]
+    KeyCount {
+        /// Observed key count.
+        actual: usize,
+    },
 
-impl From<AndError<CollectionError, CollectionError>> for OrderKeysError {
-    fn from(err: AndError<CollectionError, CollectionError>) -> Self {
-        match err {
-            AndError::Left(inner) => Self::Length(inner),
-            AndError::Right(inner) => Self::DuplicateAttribute(inner),
-        }
-    }
+    /// Two keys referred to the same attribute. The reported index
+    /// is the second occurrence (the first wins).
+    #[error("duplicate order-key attribute at index {index}")]
+    DuplicateKey {
+        /// Position of the duplicate (the second occurrence).
+        index: usize,
+    },
 }
 
 impl OrderKeys {
-    /// Validate `raw` and wrap.
+    /// Validate `keys` against the order-key rule and wrap.
     ///
     /// # Errors
     ///
-    /// Returns `OrderKeysError::Length` when `raw` is empty or
-    /// exceeds `MAX_SCHEMA_ATTRIBUTES`, and
-    /// `OrderKeysError::DuplicateAttribute` when two keys reference
-    /// the same attribute.
+    /// Returns `KeyCount` if the list length is outside
+    /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateKey` if two keys
+    /// share an attribute name.
     #[inline]
-    pub fn try_new(raw: Vec<OrderKey>) -> Result<Self, OrderKeysError> {
-        Refined::try_new(raw).map(Self).map_err(Into::into)
+    pub fn try_new(
+        keys: Vec<OrderKey>,
+    ) -> Result<Self, OrderKeysError> {
+        Refined::try_new(keys).map(Self).map_err(|err| match err {
+            CollectionError::LenOutOfRange { actual } => {
+                OrderKeysError::KeyCount { actual }
+            }
+            CollectionError::DuplicateKey { index } => {
+                OrderKeysError::DuplicateKey { index }
+            }
+            _ => unreachable!(
+                "OrderKeysRule emits only LenOutOfRange / DuplicateKey"
+            ),
+        })
     }
 
     /// Borrow the inner key list.
@@ -114,6 +129,13 @@ impl OrderKeys {
     #[inline]
     pub const fn as_slice(&self) -> &[OrderKey] {
         self.0.as_inner().as_slice()
+    }
+
+    /// Consume the wrapper and return the inner key list.
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> Vec<OrderKey> {
+        self.0.into_inner()
     }
 }
 
@@ -148,7 +170,10 @@ mod tests {
     #[test]
     fn empty_keys_rejected() {
         let result = OrderKeys::try_new(Vec::new());
-        assert!(matches!(result.unwrap_err(), OrderKeysError::Length(_)));
+        assert_eq!(
+            result.unwrap_err(),
+            OrderKeysError::KeyCount { actual: 0 },
+        );
     }
 
     #[test]
@@ -159,7 +184,10 @@ mod tests {
             raw.push(key(&name, Direction::Ascending));
         }
         let result = OrderKeys::try_new(raw);
-        assert!(matches!(result.unwrap_err(), OrderKeysError::Length(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OrderKeysError::KeyCount { .. },
+        ));
     }
 
     #[test]
@@ -170,7 +198,7 @@ mod tests {
         ]);
         assert!(matches!(
             result.unwrap_err(),
-            OrderKeysError::DuplicateAttribute(_),
+            OrderKeysError::DuplicateKey { .. },
         ));
     }
 }

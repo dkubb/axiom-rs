@@ -13,13 +13,15 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use whittle::primitive::LenItems;
+use whittle::primitive::{CollectionError, LenItems};
 use whittle::Refined;
 
 use crate::identifier::{AttributeName, Pattern};
 use crate::limits::MAX_IN_LIST;
 use crate::op_enums::{Agg, BinOp, UnOp};
 use crate::ty::{Type, Value};
+
+type InListValuesRule = LenItems<1, { MAX_IN_LIST }>;
 
 /// Length-bounded list of literals for `Expression::InList`.
 ///
@@ -30,7 +32,61 @@ use crate::ty::{Type, Value};
 /// `Optional` and lands when those variants get canonical
 /// comparison semantics. The architecture's
 /// `BoundedOrderedSet<Value, 1, MAX_IN_LIST>` shape is the target.
-pub type InListValues = Refined<Vec<Value>, LenItems<1, { MAX_IN_LIST }>>;
+#[derive(Debug, Clone, PartialEq)]
+pub struct InListValues(Refined<Vec<Value>, InListValuesRule>);
+
+/// Constructor error for `InListValues`.
+///
+/// The underlying rule is a single `LenItems<1, MAX_IN_LIST>`, so
+/// the only failure mode is a length-bound violation. The flat
+/// variant gives call sites a domain-named match target without
+/// having to thread `CollectionError` through.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InListValuesError {
+    /// Value count fell outside `1..=MAX_IN_LIST`.
+    #[error("in-list value count out of range (actual: {actual})")]
+    ValueCount {
+        /// Observed value count.
+        actual: usize,
+    },
+}
+
+impl InListValues {
+    /// Validate `values` against the in-list rule and wrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValueCount` if the list length is outside
+    /// `1..=MAX_IN_LIST`.
+    #[inline]
+    pub fn try_new(
+        values: Vec<Value>,
+    ) -> Result<Self, InListValuesError> {
+        Refined::try_new(values).map(Self).map_err(|err| match err {
+            CollectionError::LenOutOfRange { actual } => {
+                InListValuesError::ValueCount { actual }
+            }
+            _ => unreachable!(
+                "InListValuesRule (LenItems) emits only LenOutOfRange"
+            ),
+        })
+    }
+
+    /// Borrow the underlying value list.
+    #[must_use]
+    #[inline]
+    pub const fn as_slice(&self) -> &[Value] {
+        self.0.as_inner().as_slice()
+    }
+
+    /// Consume the wrapper and return the inner value list.
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> Vec<Value> {
+        self.0.into_inner()
+    }
+}
 
 /// `true` iff `expr` (or any sub-expression) is an
 /// `Expression::Agg`.

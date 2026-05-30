@@ -116,7 +116,7 @@ pub fn infer(
         }
         Expression::InList(operand, values) => {
             let ot = infer(operand, schema)?;
-            for (index, v) in values.as_inner().iter().enumerate() {
+            for (index, v) in values.as_slice().iter().enumerate() {
                 let vt = infer_value(v)?;
                 if vt != ot {
                     return Err(InferError::InListElementMismatch {
@@ -639,8 +639,7 @@ mod tests {
     fn in_list(
         values: alloc::vec::Vec<Value>,
     ) -> crate::expression::InListValues {
-        use whittle::Refined;
-        Refined::try_new(values).unwrap()
+        crate::expression::InListValues::try_new(values).unwrap()
     }
 
     #[test]

@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 
 use thiserror::Error;
 use whittle::primitive::{CollectionError, LenItems};
-use whittle::Refined;
+use whittle::refinement;
 
 use crate::identifier::TableName;
 use crate::infer::ValueTypeError;
@@ -28,45 +28,35 @@ use crate::schema::Schema;
 // structural bound is already enforced by whittle.
 type SourceRowsRule = LenItems<0, { MAX_ROWS_IN_AST }>;
 
-/// Length-bounded list of `Row`s, the inline data for a memory source.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Rows(Refined<Vec<Row>, SourceRowsRule>);
+refinement! {
+    /// Length-bounded list of `Row`s, the inline data for a memory source.
+    #[derive(Debug, Clone, PartialEq)]
+    pub Rows: Vec<Row>, SourceRowsRule;
+}
 
 /// Constructor error for `Rows`.
 pub type RowsError = CollectionError;
 
 impl Rows {
-    /// Validate `raw` and wrap.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CollectionError::LenOutOfRange` when `raw` exceeds
-    /// `MAX_ROWS_IN_AST` rows. (Lower bound is `0` so the empty
-    /// relation is admissible.)
-    #[inline]
-    pub fn try_new(raw: Vec<Row>) -> Result<Self, RowsError> {
-        Refined::try_new(raw).map(Self)
-    }
-
     /// Borrow the underlying row list.
     #[must_use]
     #[inline]
     pub const fn as_slice(&self) -> &[Row] {
-        self.0.as_inner().as_slice()
+        self.as_inner().as_slice()
     }
 
     /// Number of rows.
     #[must_use]
     #[inline]
     pub const fn len(&self) -> usize {
-        self.0.as_inner().len()
+        self.as_inner().len()
     }
 
     /// `true` if the source has no rows.
     #[must_use]
     #[inline]
     pub const fn is_empty(&self) -> bool {
-        self.0.as_inner().is_empty()
+        self.as_inner().is_empty()
     }
 }
 

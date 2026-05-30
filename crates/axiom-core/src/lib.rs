@@ -30,7 +30,8 @@ pub use constraint::{
     ConstraintSetError, RowConstraint,
 };
 pub use expression::{
-    BoolExpression, Expression, InListValues, OpaqueId, Predicate,
+    BoolExpression, Expression, InListValues, InListValuesError,
+    OpaqueId, Predicate,
 };
 pub use infer::{
     agg_ty, infer as infer_type, infer_value, row_matches_schema,

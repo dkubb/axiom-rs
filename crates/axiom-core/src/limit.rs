@@ -4,7 +4,7 @@
 //! rule keyed off a constant in `crate::limits`.
 
 use whittle::primitive::{NumericError, Within};
-use whittle::Refined;
+use whittle::{refinement, Refined};
 
 use crate::limits::{MAX_LIMIT_COUNT, MAX_OFFSET, MAX_PATH_INDEX};
 
@@ -12,31 +12,25 @@ use crate::limits::{MAX_LIMIT_COUNT, MAX_OFFSET, MAX_PATH_INDEX};
 // hold every value we need. Casts from `u64`/`usize` round-trip
 // losslessly into `i128`.
 
-/// `OFFSET` value in a `Limit` operator: `0..=MAX_OFFSET`.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Offset(Refined<u64, Within<0, { MAX_OFFSET as i128 }>>);
-
-/// Constructor error for `Offset`.
-pub type OffsetError = NumericError;
+refinement! {
+    /// `OFFSET` value in a `Limit` operator: `0..=MAX_OFFSET`.
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+    pub Offset: u64, Within<0, { MAX_OFFSET as i128 }>;
+}
 
 impl Offset {
-    /// Construct an `Offset` from a raw `u64`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `NumericError::OutOfRange` if `raw > MAX_OFFSET`.
-    #[inline]
-    pub fn try_new(raw: u64) -> Result<Self, OffsetError> {
-        Refined::try_new(raw).map(Self)
-    }
-
     /// Borrow the inner `u64`.
     #[must_use]
     #[inline]
     pub const fn get(&self) -> u64 {
-        *self.0.as_inner()
+        *self.as_inner()
     }
 }
+
+/// Constructor error for `Offset`. `Within<MIN, MAX>` in whittle
+/// is a nominal domain newtype with a flat `NumericError`, so the
+/// composition machinery does not leak through the domain surface.
+pub type OffsetError = NumericError;
 
 /// `LIMIT n` count in the `Limit` operator. `Bounded(0)` is
 /// admissible and denotes `LIMIT 0`.
@@ -48,7 +42,8 @@ pub enum LimitCount {
     Bounded(Refined<u64, Within<0, { MAX_LIMIT_COUNT as i128 }>>),
 }
 
-/// Constructor error for `LimitCount::Bounded`.
+/// Constructor error for `LimitCount::Bounded`. `Within` exposes
+/// a flat `NumericError`; see `OffsetError` for the same rationale.
 pub type LimitCountError = NumericError;
 
 impl LimitCount {
@@ -83,31 +78,25 @@ impl LimitCount {
     }
 }
 
-/// Positional index inside a `Path` step: `0..=MAX_PATH_INDEX`.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct BoundedIndex(Refined<usize, Within<0, { MAX_PATH_INDEX as i128 }>>);
-
-/// Constructor error for `BoundedIndex`.
-pub type BoundedIndexError = NumericError;
+refinement! {
+    /// Positional index inside a `Path` step:
+    /// `0..=MAX_PATH_INDEX`.
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+    pub BoundedIndex: usize, Within<0, { MAX_PATH_INDEX as i128 }>;
+}
 
 impl BoundedIndex {
-    /// Validate `raw` and wrap.
-    ///
-    /// # Errors
-    ///
-    /// Returns `NumericError::OutOfRange` if `raw > MAX_PATH_INDEX`.
-    #[inline]
-    pub fn try_new(raw: usize) -> Result<Self, BoundedIndexError> {
-        Refined::try_new(raw).map(Self)
-    }
-
     /// Borrow the inner `usize`.
     #[must_use]
     #[inline]
     pub const fn get(&self) -> usize {
-        *self.0.as_inner()
+        *self.as_inner()
     }
 }
+
+/// Constructor error for `BoundedIndex`. `Within` exposes a flat
+/// `NumericError`; see `OffsetError` for the same rationale.
+pub type BoundedIndexError = NumericError;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used,
@@ -134,6 +123,8 @@ mod tests {
     fn offset_rejects_above_max() {
         // u64::MAX > MAX_OFFSET = u64::MAX / 2
         let result = Offset::try_new(u64::MAX);
+        // `Within` exposes a flat `NumericError`; no composition
+        // machinery leaks through.
         assert!(matches!(
             result.unwrap_err(),
             NumericError::OutOfRange { .. },
@@ -163,6 +154,8 @@ mod tests {
     #[test]
     fn limit_count_bounded_rejects_above_max() {
         let result = LimitCount::bounded(MAX_LIMIT_COUNT + 1);
+        // `Within` exposes a flat `NumericError`; no composition
+        // machinery leaks through.
         assert!(matches!(
             result.unwrap_err(),
             NumericError::OutOfRange { .. },
@@ -184,6 +177,8 @@ mod tests {
     #[test]
     fn bounded_index_rejects_above_max() {
         let result = BoundedIndex::try_new(MAX_PATH_INDEX + 1);
+        // `Within` exposes a flat `NumericError`; no composition
+        // machinery leaks through.
         assert!(matches!(
             result.unwrap_err(),
             NumericError::OutOfRange { .. },

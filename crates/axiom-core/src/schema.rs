@@ -12,7 +12,7 @@ use core::marker::PhantomData;
 use whittle::primitive::{
     CollectionError, KeyOf, LenItems, NumericError, UniqueByKey, Within,
 };
-use whittle::{And, AndError, Refined};
+use whittle::{And, Refined};
 
 use crate::identifier::AttributeName;
 use crate::limits::MAX_SCHEMA_ATTRIBUTES;
@@ -23,7 +23,9 @@ use crate::ty::Type;
 pub type SchemaCardinality =
     Refined<usize, Within<1, { MAX_SCHEMA_ATTRIBUTES as i128 }>>;
 
-/// Constructor error for `SchemaCardinality`.
+/// Constructor error for `SchemaCardinality`. `Within<MIN, MAX>`
+/// in whittle is a nominal domain newtype with a flat
+/// `NumericError`, so the composition machinery does not leak.
 pub type SchemaCardinalityError = NumericError;
 
 /// One column in a relation schema: its name and type.
@@ -48,7 +50,8 @@ impl KeyOf<Attribute> for AttributeKey {
 
 // The composite rule: length-bound first, then per-attribute-name
 // uniqueness. Both inner rules report through `CollectionError`, so
-// the wrapping `AndError` carries the same error type on both sides.
+// the composition's error is `CollectionError` directly — no
+// positional `Left` / `Right` wrapping is exposed.
 type SchemaHeaderRule = And<
     LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>,
     UniqueByKey<Attribute, AttributeKey>,
@@ -58,34 +61,65 @@ type SchemaHeaderRule = And<
 /// unique attribute names. The entire invariant is a single
 /// `whittle::Refined` value — there is no manual second pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Schema {
-    attributes: Refined<Vec<Attribute>, SchemaHeaderRule>,
+pub struct Schema(Refined<Vec<Attribute>, SchemaHeaderRule>);
+
+/// Constructor error for `Schema`.
+///
+/// Flat domain-shaped enum: the underlying composition is
+/// `And<LenItems, UniqueByKey>` and both inner rules report through
+/// `CollectionError`, so the composition surfaces `CollectionError`
+/// directly — call sites match on `Cardinality` or
+/// `DuplicateAttribute` here without seeing the rule shape.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SchemaError {
+    /// Attribute count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
+    #[error("schema cardinality out of range (actual: {actual})")]
+    Cardinality {
+        /// Observed attribute count.
+        actual: usize,
+    },
+
+    /// Two attributes shared a name. The reported index is the
+    /// second occurrence (the first wins).
+    #[error("duplicate attribute name at index {index}")]
+    DuplicateAttribute {
+        /// Position of the duplicate (the second occurrence).
+        index: usize,
+    },
 }
 
-/// Constructor error for `Schema`. Wraps whittle's
-/// `AndError<CollectionError, CollectionError>` under the axiom-rs
-/// vocabulary so call sites need not name the rule type.
-pub type SchemaError = AndError<CollectionError, CollectionError>;
-
 impl Schema {
-    /// Validate `raw` and wrap.
+    /// Validate `attributes` against the schema-header rule and wrap.
     ///
     /// # Errors
     ///
-    /// Returns `AndError::Left(CollectionError::LenOutOfRange ..)`
-    /// when `raw` is empty or exceeds `MAX_SCHEMA_ATTRIBUTES`.
-    /// Returns `AndError::Right(CollectionError::DuplicateKey ..)`
-    /// when two attributes share the same name.
+    /// Returns `Cardinality` if the list length is outside
+    /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateAttribute` if two
+    /// entries share a name.
     #[inline]
-    pub fn try_new(raw: Vec<Attribute>) -> Result<Self, SchemaError> {
-        Refined::try_new(raw).map(|attributes| Self { attributes })
+    pub fn try_new(
+        attributes: Vec<Attribute>,
+    ) -> Result<Self, SchemaError> {
+        Refined::try_new(attributes).map(Self).map_err(|err| match err {
+            CollectionError::LenOutOfRange { actual } => {
+                SchemaError::Cardinality { actual }
+            }
+            CollectionError::DuplicateKey { index } => {
+                SchemaError::DuplicateAttribute { index }
+            }
+            // The underlying composition only produces the two
+            // variants matched above; other `CollectionError`
+            // variants belong to rules not used here.
+            _ => unreachable!("SchemaHeaderRule emits only LenOutOfRange / DuplicateKey"),
+        })
     }
 
     /// Borrow the attribute list.
     #[must_use]
     #[inline]
     pub const fn attributes(&self) -> &[Attribute] {
-        self.attributes.as_inner().as_slice()
+        self.0.as_inner().as_slice()
     }
 
     /// Number of attributes in the schema. Never zero — the rule's
@@ -93,7 +127,14 @@ impl Schema {
     #[must_use]
     #[inline]
     pub const fn cardinality(&self) -> usize {
-        self.attributes.as_inner().len()
+        self.0.as_inner().len()
+    }
+
+    /// Consume the wrapper and return the inner attribute list.
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> Vec<Attribute> {
+        self.0.into_inner()
     }
 
     /// Look up an attribute by name. `None` if absent.
@@ -119,11 +160,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use whittle::primitive::CollectionError;
-    use whittle::AndError;
-
     use super::{
         Attribute, Schema, SchemaCardinality, SchemaCardinalityError,
+        SchemaError,
     };
     use crate::identifier::AttributeName;
     use crate::limits::MAX_SCHEMA_ATTRIBUTES;
@@ -141,8 +180,12 @@ mod tests {
     #[test]
     fn cardinality_zero_rejected() {
         let result = SchemaCardinality::try_new(0_usize);
+        // `Within` exposes a flat domain `NumericError` aliased
+        // here as `SchemaCardinalityError`; no composition
+        // machinery leaks through the surface.
+        let err: SchemaCardinalityError = result.unwrap_err();
         assert!(matches!(
-            result.unwrap_err(),
+            err,
             SchemaCardinalityError::OutOfRange { value: 0 },
         ));
     }
@@ -180,10 +223,10 @@ mod tests {
     #[test]
     fn empty_schema_rejected_by_length_check() {
         let result = Schema::try_new(Vec::new());
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Left(CollectionError::LenOutOfRange { actual: 0 }),
-        ));
+            SchemaError::Cardinality { actual: 0 },
+        );
     }
 
     #[test]
@@ -192,9 +235,9 @@ mod tests {
             attr("id", Type::Int64),
             attr("id", Type::String),
         ]);
-        assert!(matches!(
+        assert_eq!(
             result.unwrap_err(),
-            AndError::Right(CollectionError::DuplicateKey { index: 1 }),
-        ));
+            SchemaError::DuplicateAttribute { index: 1 },
+        );
     }
 }
