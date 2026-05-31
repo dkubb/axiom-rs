@@ -14,7 +14,7 @@ use core::fmt;
 use whittle::primitive::{
     EachChar, FirstChar, IdentChar, IdentStart, LenChars, StringError,
 };
-use whittle::{And, Refined};
+use whittle::{All, Refined};
 
 use crate::limits::{
     MAX_ATTRIBUTE_NAME_LEN, MAX_PATTERN_LEN, MAX_TABLE_NAME_LEN,
@@ -23,13 +23,14 @@ use crate::limits::{
 // ─── Internal rule aliases. ──────────────────────────────────────
 
 // Identifier grammar: leading char alpha/underscore, body
-// alnum/underscore. The length bound is composed at the outer
-// level so the per-name-uniqueness checks downstream see a
-// length-bounded string before walking characters.
-type AttributeNameRule = And<
+// alnum/underscore. The length bound runs first so the per-name
+// character walks see a length-bounded string; `EachChar` then
+// `FirstChar` preserve the original rejection order.
+type AttributeNameRule = All<(
     LenChars<1, { MAX_ATTRIBUTE_NAME_LEN }>,
-    And<EachChar<IdentChar>, FirstChar<IdentStart>>,
->;
+    EachChar<IdentChar>,
+    FirstChar<IdentStart>,
+)>;
 
 // LenChars<1, MAX>'s lower bound already excludes the empty
 // string, so a separate NonEmpty rule would double-encode the
@@ -54,8 +55,8 @@ pub struct AttributeName(Refined<String, AttributeNameRule>);
 /// Constructor error for `AttributeName`.
 ///
 /// Flat domain-shaped enum. The underlying composition is
-/// `And<LenChars, And<EachChar, FirstChar>>` and produces
-/// `StringError` directly (both inner rules share that error type).
+/// `All<(LenChars, EachChar, FirstChar)>` and produces
+/// `StringError` directly (all inner rules share that error type).
 /// The three branches map to three flat variants so call sites do
 /// not see the rule shape at all.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
