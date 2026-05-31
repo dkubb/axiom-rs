@@ -11,14 +11,10 @@
 use alloc::string::String;
 use core::fmt;
 
-use whittle::primitive::{
-    EachChar, FirstChar, IdentChar, IdentStart, LenChars, StringError,
-};
+use whittle::primitive::{EachChar, FirstChar, IdentChar, IdentStart, LenChars, StringError};
 use whittle::{All, Refined};
 
-use crate::limits::{
-    MAX_ATTRIBUTE_NAME_LEN, MAX_PATTERN_LEN, MAX_TABLE_NAME_LEN,
-};
+use crate::limits::{MAX_ATTRIBUTE_NAME_LEN, MAX_PATTERN_LEN, MAX_TABLE_NAME_LEN};
 
 // ─── Internal rule aliases. ──────────────────────────────────────
 
@@ -94,12 +90,8 @@ impl AttributeName {
     #[inline]
     pub fn try_new(raw: String) -> Result<Self, AttributeNameError> {
         Refined::try_new(raw).map(Self).map_err(|err| match err {
-            StringError::CharCountOutOfRange { actual } => {
-                AttributeNameError::Length { actual }
-            }
-            StringError::BadChar { offset } => {
-                AttributeNameError::BodyChar { offset }
-            }
+            StringError::CharCountOutOfRange { actual } => AttributeNameError::Length { actual },
+            StringError::BadChar { offset } => AttributeNameError::BodyChar { offset },
             StringError::BadFirstChar => AttributeNameError::FirstChar,
             _ => unreachable!(
                 "AttributeNameRule emits only CharCountOutOfRange / BadChar / BadFirstChar"
@@ -160,12 +152,8 @@ impl TableName {
     #[inline]
     pub fn try_new(raw: String) -> Result<Self, TableNameError> {
         Refined::try_new(raw).map(Self).map_err(|err| match err {
-            StringError::CharCountOutOfRange { actual } => {
-                TableNameError::Length { actual }
-            }
-            _ => unreachable!(
-                "TableNameRule (LenChars) emits only CharCountOutOfRange"
-            ),
+            StringError::CharCountOutOfRange { actual } => TableNameError::Length { actual },
+            _ => unreachable!("TableNameRule (LenChars) emits only CharCountOutOfRange"),
         })
     }
 
@@ -215,12 +203,8 @@ impl Pattern {
     #[inline]
     pub fn try_new(raw: String) -> Result<Self, PatternError> {
         Refined::try_new(raw).map(Self).map_err(|err| match err {
-            StringError::CharCountOutOfRange { actual } => {
-                PatternError::Length { actual }
-            }
-            _ => unreachable!(
-                "PatternRule (LenChars) emits only CharCountOutOfRange"
-            ),
+            StringError::CharCountOutOfRange { actual } => PatternError::Length { actual },
+            _ => unreachable!("PatternRule (LenChars) emits only CharCountOutOfRange"),
         })
     }
 
@@ -240,18 +224,18 @@ impl Pattern {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::string::{String, ToString};
 
     use super::{
-        AttributeName, AttributeNameError, Pattern, PatternError,
-        TableName, TableNameError,
+        AttributeName, AttributeNameError, Pattern, PatternError, TableName, TableNameError,
     };
-    use crate::limits::{
-        MAX_ATTRIBUTE_NAME_LEN, MAX_PATTERN_LEN, MAX_TABLE_NAME_LEN,
-    };
+    use crate::limits::{MAX_ATTRIBUTE_NAME_LEN, MAX_PATTERN_LEN, MAX_TABLE_NAME_LEN};
 
     // ─── AttributeName. ──────────────────────────────────────────
 
@@ -296,10 +280,7 @@ mod tests {
         // FirstChar<IdentStart> rejects the leading digit; the rule
         // surfaces `StringError::BadFirstChar` (no offset — head
         // failure is a single position by construction).
-        assert_eq!(
-            result.unwrap_err(),
-            AttributeNameError::FirstChar,
-        );
+        assert_eq!(result.unwrap_err(), AttributeNameError::FirstChar,);
     }
 
     #[test]
@@ -326,20 +307,14 @@ mod tests {
     #[test]
     fn table_name_rejects_empty() {
         let result = TableName::try_new(String::new());
-        assert_eq!(
-            result.unwrap_err(),
-            TableNameError::Length { actual: 0 },
-        );
+        assert_eq!(result.unwrap_err(), TableNameError::Length { actual: 0 },);
     }
 
     #[test]
     fn table_name_rejects_overlength() {
         let raw = "x".repeat(MAX_TABLE_NAME_LEN + 1);
         let result = TableName::try_new(raw);
-        assert!(matches!(
-            result.unwrap_err(),
-            TableNameError::Length { .. },
-        ));
+        assert!(matches!(result.unwrap_err(), TableNameError::Length { .. },));
     }
 
     // ─── Pattern. ────────────────────────────────────────────────
@@ -353,19 +328,13 @@ mod tests {
     #[test]
     fn pattern_rejects_empty() {
         let result = Pattern::try_new(String::new());
-        assert_eq!(
-            result.unwrap_err(),
-            PatternError::Length { actual: 0 },
-        );
+        assert_eq!(result.unwrap_err(), PatternError::Length { actual: 0 },);
     }
 
     #[test]
     fn pattern_rejects_overlength() {
         let raw = "x".repeat(MAX_PATTERN_LEN + 1);
         let result = Pattern::try_new(raw);
-        assert!(matches!(
-            result.unwrap_err(),
-            PatternError::Length { .. },
-        ));
+        assert!(matches!(result.unwrap_err(), PatternError::Length { .. },));
     }
 }

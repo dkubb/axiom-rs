@@ -9,9 +9,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use whittle::primitive::{
-    CollectionError, KeyOf, LenItems, NumericError, UniqueByKey, Within,
-};
+use whittle::primitive::{CollectionError, KeyOf, LenItems, NumericError, UniqueByKey, Within};
 use whittle::{And, Refined};
 
 use crate::identifier::AttributeName;
@@ -20,8 +18,7 @@ use crate::ty::Type;
 
 /// Number of attributes in a `Schema`: at least one (the empty
 /// schema is not admissible), at most `MAX_SCHEMA_ATTRIBUTES`.
-pub type SchemaCardinality =
-    Refined<usize, Within<1, { MAX_SCHEMA_ATTRIBUTES as i128 }>>;
+pub type SchemaCardinality = Refined<usize, Within<1, { MAX_SCHEMA_ATTRIBUTES as i128 }>>;
 
 /// Constructor error for `SchemaCardinality`. `Within<MIN, MAX>`
 /// in whittle is a nominal domain newtype with a flat
@@ -52,10 +49,8 @@ impl KeyOf<Attribute> for AttributeKey {
 // uniqueness. Both inner rules report through `CollectionError`, so
 // the composition's error is `CollectionError` directly — no
 // positional `Left` / `Right` wrapping is exposed.
-type SchemaHeaderRule = And<
-    LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>,
-    UniqueByKey<Attribute, AttributeKey>,
->;
+type SchemaHeaderRule =
+    And<LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>, UniqueByKey<Attribute, AttributeKey>>;
 
 /// Relation header: bounded ordered list of `Attribute`s with
 /// unique attribute names. The entire invariant is a single
@@ -98,21 +93,19 @@ impl Schema {
     /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateAttribute` if two
     /// entries share a name.
     #[inline]
-    pub fn try_new(
-        attributes: Vec<Attribute>,
-    ) -> Result<Self, SchemaError> {
-        Refined::try_new(attributes).map(Self).map_err(|err| match err {
-            CollectionError::LenOutOfRange { actual } => {
-                SchemaError::Cardinality { actual }
-            }
-            CollectionError::DuplicateKey { index } => {
-                SchemaError::DuplicateAttribute { index }
-            }
-            // The underlying composition only produces the two
-            // variants matched above; other `CollectionError`
-            // variants belong to rules not used here.
-            _ => unreachable!("SchemaHeaderRule emits only LenOutOfRange / DuplicateKey"),
-        })
+    pub fn try_new(attributes: Vec<Attribute>) -> Result<Self, SchemaError> {
+        Refined::try_new(attributes)
+            .map(Self)
+            .map_err(|err| match err {
+                CollectionError::LenOutOfRange { actual } => SchemaError::Cardinality { actual },
+                CollectionError::DuplicateKey { index } => {
+                    SchemaError::DuplicateAttribute { index }
+                }
+                // The underlying composition only produces the two
+                // variants matched above; other `CollectionError`
+                // variants belong to rules not used here.
+                _ => unreachable!("SchemaHeaderRule emits only LenOutOfRange / DuplicateKey"),
+            })
     }
 
     /// Borrow the attribute list.
@@ -153,17 +146,17 @@ impl Schema {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::string::ToString;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::{
-        Attribute, Schema, SchemaCardinality, SchemaCardinalityError,
-        SchemaError,
-    };
+    use super::{Attribute, Schema, SchemaCardinality, SchemaCardinalityError, SchemaError};
     use crate::identifier::AttributeName;
     use crate::limits::MAX_SCHEMA_ATTRIBUTES;
     use crate::ty::Type;
@@ -212,29 +205,19 @@ mod tests {
 
     #[test]
     fn schema_two_distinct_attributes_admitted() {
-        let s = Schema::try_new(vec![
-            attr("id", Type::Int64),
-            attr("name", Type::String),
-        ])
-        .unwrap();
+        let s = Schema::try_new(vec![attr("id", Type::Int64), attr("name", Type::String)]).unwrap();
         assert_eq!(s.cardinality(), 2);
     }
 
     #[test]
     fn empty_schema_rejected_by_length_check() {
         let result = Schema::try_new(Vec::new());
-        assert_eq!(
-            result.unwrap_err(),
-            SchemaError::Cardinality { actual: 0 },
-        );
+        assert_eq!(result.unwrap_err(), SchemaError::Cardinality { actual: 0 },);
     }
 
     #[test]
     fn duplicate_attribute_name_rejected() {
-        let result = Schema::try_new(vec![
-            attr("id", Type::Int64),
-            attr("id", Type::String),
-        ]);
+        let result = Schema::try_new(vec![attr("id", Type::Int64), attr("id", Type::String)]);
         assert_eq!(
             result.unwrap_err(),
             SchemaError::DuplicateAttribute { index: 1 },

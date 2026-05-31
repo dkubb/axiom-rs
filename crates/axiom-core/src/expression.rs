@@ -13,8 +13,8 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use whittle::primitive::{CollectionError, LenItems};
 use whittle::Refined;
+use whittle::primitive::{CollectionError, LenItems};
 
 use crate::identifier::{AttributeName, Pattern};
 use crate::limits::MAX_IN_LIST;
@@ -60,16 +60,10 @@ impl InListValues {
     /// Returns `ValueCount` if the list length is outside
     /// `1..=MAX_IN_LIST`.
     #[inline]
-    pub fn try_new(
-        values: Vec<Value>,
-    ) -> Result<Self, InListValuesError> {
+    pub fn try_new(values: Vec<Value>) -> Result<Self, InListValuesError> {
         Refined::try_new(values).map(Self).map_err(|err| match err {
-            CollectionError::LenOutOfRange { actual } => {
-                InListValuesError::ValueCount { actual }
-            }
-            _ => unreachable!(
-                "InListValuesRule (LenItems) emits only LenOutOfRange"
-            ),
+            CollectionError::LenOutOfRange { actual } => InListValuesError::ValueCount { actual },
+            _ => unreachable!("InListValuesRule (LenItems) emits only LenOutOfRange"),
         })
     }
 
@@ -100,9 +94,7 @@ impl InListValues {
 pub fn contains_aggregate(expr: &Expression) -> bool {
     match expr {
         Expression::Attr(_) | Expression::Lit(_) => false,
-        Expression::BinOp(_, lhs, rhs) => {
-            contains_aggregate(lhs) || contains_aggregate(rhs)
-        }
+        Expression::BinOp(_, lhs, rhs) => contains_aggregate(lhs) || contains_aggregate(rhs),
         Expression::UnOp(_, operand)
         | Expression::Like(operand, _)
         | Expression::IsNull(operand)
@@ -246,8 +238,11 @@ pub enum Predicate {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::boxed::Box;
     use alloc::string::ToString;
@@ -286,11 +281,8 @@ mod tests {
 
     #[test]
     fn bool_expression_accepts_bool_typed_expression() {
-        let e = BoolExpression::try_new(
-            &bool_schema(),
-            Expression::Lit(Value::Bool(true)),
-        )
-        .unwrap();
+        let e =
+            BoolExpression::try_new(&bool_schema(), Expression::Lit(Value::Bool(true))).unwrap();
         assert!(matches!(
             e.as_expression(),
             Expression::Lit(Value::Bool(true)),
@@ -299,11 +291,8 @@ mod tests {
 
     #[test]
     fn bool_expression_rejects_non_bool_expression() {
-        let err = BoolExpression::try_new(
-            &bool_schema(),
-            Expression::Lit(Value::Int32(0)),
-        )
-        .unwrap_err();
+        let err =
+            BoolExpression::try_new(&bool_schema(), Expression::Lit(Value::Int32(0))).unwrap_err();
         assert!(matches!(
             err,
             InferError::TypeMismatch {
@@ -315,23 +304,18 @@ mod tests {
 
     #[test]
     fn bool_expression_rejects_unknown_attribute() {
-        let err = BoolExpression::try_new(
-            &bool_schema(),
-            Expression::Attr(attr("missing")),
-        )
-        .unwrap_err();
+        let err =
+            BoolExpression::try_new(&bool_schema(), Expression::Attr(attr("missing"))).unwrap_err();
         assert!(matches!(err, InferError::UnknownAttribute(_)));
     }
 
     #[test]
     fn predicate_expr_wraps_bool_expression() {
-        let e = BoolExpression::try_new(
-            &bool_schema(),
-            Expression::Attr(attr("flag")),
-        )
-        .unwrap();
+        let e = BoolExpression::try_new(&bool_schema(), Expression::Attr(attr("flag"))).unwrap();
         let p = Predicate::Expr(e);
-        let Predicate::Expr(_) = p else { unreachable!() };
+        let Predicate::Expr(_) = p else {
+            unreachable!()
+        };
     }
 
     #[test]
@@ -340,7 +324,9 @@ mod tests {
         // the test module is inside the same crate.
         let id = OpaqueId::new(42);
         let p = Predicate::Opaque(id);
-        let Predicate::Opaque(got) = p else { unreachable!() };
+        let Predicate::Opaque(got) = p else {
+            unreachable!()
+        };
         assert_eq!(got.get(), 42);
     }
 }

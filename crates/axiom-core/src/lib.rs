@@ -26,50 +26,39 @@ mod ty;
 
 pub use canonical::{CanonicalPredicate, CanonicalPredicateError};
 pub use constraint::{
-    AttributeConstraint, AttributeConstraintError, ConstraintSet,
-    ConstraintSetError, RowConstraint,
+    AttributeConstraint, AttributeConstraintError, ConstraintSet, ConstraintSetError, RowConstraint,
 };
 pub use expression::{
-    BoolExpression, Expression, InListValues, InListValuesError,
-    OpaqueId, Predicate,
-};
-pub use infer::{
-    agg_ty, infer as infer_type, infer_value, row_matches_schema,
-    value_matches_type, InferError, ValueTypeError,
+    BoolExpression, Expression, InListValues, InListValuesError, OpaqueId, Predicate,
 };
 pub use identifier::{
-    AttributeName, AttributeNameError, Pattern, PatternError,
-    TableName, TableNameError,
+    AttributeName, AttributeNameError, Pattern, PatternError, TableName, TableNameError,
+};
+pub use infer::{
+    InferError, ValueTypeError, agg_ty, infer as infer_type, infer_value, row_matches_schema,
+    value_matches_type,
 };
 pub use join::{EquiPair, EquiPairs, EquiPairsError, JoinOn};
-pub use op::{
-    AttributeSet, AttributeSetError, GroupingSet, GroupingSetError,
-    NamedAggKey, NamedAggSet, NamedAggSetError, Op, OpError,
-};
 pub use limit::{
-    BoundedIndex, BoundedIndexError, LimitCount, LimitCountError,
-    Offset, OffsetError,
+    BoundedIndex, BoundedIndexError, LimitCount, LimitCountError, Offset, OffsetError,
 };
 pub use limits::{
-    MAX_ARRAY_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_IN_LIST,
-    MAX_LIMIT_COUNT, MAX_OFFSET, MAX_PATH_INDEX, MAX_PATH_STEPS,
-    MAX_PATTERN_LEN, MAX_ROWS_IN_AST, MAX_SCHEMA_ATTRIBUTES,
+    MAX_ARRAY_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_IN_LIST, MAX_LIMIT_COUNT, MAX_OFFSET,
+    MAX_PATH_INDEX, MAX_PATH_STEPS, MAX_PATTERN_LEN, MAX_ROWS_IN_AST, MAX_SCHEMA_ATTRIBUTES,
     MAX_TABLE_NAME_LEN,
 };
-pub use op_enums::{Agg, BinOp, JoinKind, NamedAgg, UnOp};
-pub use order::{
-    Direction, NullOrder, OrderKey, OrderKeys, OrderKeysError,
+pub use op::{
+    AttributeSet, AttributeSetError, GroupingSet, GroupingSetError, NamedAggKey, NamedAggSet,
+    NamedAggSetError, Op, OpError,
 };
+pub use op_enums::{Agg, BinOp, JoinKind, NamedAgg, UnOp};
+pub use order::{Direction, NullOrder, OrderKey, OrderKeys, OrderKeysError};
 pub use path::{
-    AnyPath, Kind, Lens, LensPath, Path, PathError, PathStep,
-    Traversal, TraversalPath,
+    AnyPath, Kind, Lens, LensPath, Path, PathError, PathStep, Traversal, TraversalPath,
 };
 pub use row::{Row, RowError};
 pub use schema::{
-    Attribute, AttributeKey, Schema, SchemaCardinality,
-    SchemaCardinalityError, SchemaError,
+    Attribute, AttributeKey, Schema, SchemaCardinality, SchemaCardinalityError, SchemaError,
 };
-pub use source::{
-    MemorySource, MemorySourceError, Rows, RowsError, Source,
-};
+pub use source::{MemorySource, MemorySourceError, Rows, RowsError, Source};
 pub use ty::{Type, Value};

@@ -10,9 +10,7 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use whittle::primitive::{
-    CollectionError, IdentityKey, LenItems, UniqueByKey,
-};
+use whittle::primitive::{CollectionError, IdentityKey, LenItems, UniqueByKey};
 use whittle::{And, Refined};
 
 use crate::expression::{Expression, Predicate};
@@ -73,9 +71,7 @@ impl AttributeSet {
     /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateAttribute` if two
     /// entries share a name.
     #[inline]
-    pub fn try_new(
-        attrs: Vec<AttributeName>,
-    ) -> Result<Self, AttributeSetError> {
+    pub fn try_new(attrs: Vec<AttributeName>) -> Result<Self, AttributeSetError> {
         Refined::try_new(attrs).map(Self).map_err(|err| match err {
             CollectionError::LenOutOfRange { actual } => {
                 AttributeSetError::AttributeCount { actual }
@@ -83,9 +79,7 @@ impl AttributeSet {
             CollectionError::DuplicateKey { index } => {
                 AttributeSetError::DuplicateAttribute { index }
             }
-            _ => unreachable!(
-                "AttributeSetRule emits only LenOutOfRange / DuplicateKey"
-            ),
+            _ => unreachable!("AttributeSetRule emits only LenOutOfRange / DuplicateKey"),
         })
     }
 
@@ -148,19 +142,13 @@ impl GroupingSet {
     /// `0..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateAttribute` if two
     /// entries share a name.
     #[inline]
-    pub fn try_new(
-        keys: Vec<AttributeName>,
-    ) -> Result<Self, GroupingSetError> {
+    pub fn try_new(keys: Vec<AttributeName>) -> Result<Self, GroupingSetError> {
         Refined::try_new(keys).map(Self).map_err(|err| match err {
-            CollectionError::LenOutOfRange { actual } => {
-                GroupingSetError::GroupCount { actual }
-            }
+            CollectionError::LenOutOfRange { actual } => GroupingSetError::GroupCount { actual },
             CollectionError::DuplicateKey { index } => {
                 GroupingSetError::DuplicateAttribute { index }
             }
-            _ => unreachable!(
-                "GroupingSetRule emits only LenOutOfRange / DuplicateKey"
-            ),
+            _ => unreachable!("GroupingSetRule emits only LenOutOfRange / DuplicateKey"),
         })
     }
 
@@ -181,10 +169,8 @@ impl GroupingSet {
 
 // ─── Aggregate output: length-bounded and unique-by-output-name. ─
 
-type NamedAggSetRule = And<
-    LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>,
-    UniqueByKey<NamedAgg, NamedAggKey>,
->;
+type NamedAggSetRule =
+    And<LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>, UniqueByKey<NamedAgg, NamedAggKey>>;
 
 /// Key extractor for `UniqueByKey<NamedAgg, NamedAggKey>` —
 /// uniqueness is on the output attribute name.
@@ -234,9 +220,7 @@ impl NamedAggSet {
     /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateOutputName` if two
     /// aggregates share an output name.
     #[inline]
-    pub fn try_new(
-        aggs: Vec<NamedAgg>,
-    ) -> Result<Self, NamedAggSetError> {
+    pub fn try_new(aggs: Vec<NamedAgg>) -> Result<Self, NamedAggSetError> {
         Refined::try_new(aggs).map(Self).map_err(|err| match err {
             CollectionError::LenOutOfRange { actual } => {
                 NamedAggSetError::AggregateCount { actual }
@@ -244,9 +228,7 @@ impl NamedAggSet {
             CollectionError::DuplicateKey { index } => {
                 NamedAggSetError::DuplicateOutputName { index }
             }
-            _ => unreachable!(
-                "NamedAggSetRule emits only LenOutOfRange / DuplicateKey"
-            ),
+            _ => unreachable!("NamedAggSetRule emits only LenOutOfRange / DuplicateKey"),
         })
     }
 
@@ -360,7 +342,10 @@ impl Op {
     #[inline]
     pub fn source(src: Source) -> Self {
         let schema = src.schema().clone();
-        Self { kind: OpKind::Source(src), schema }
+        Self {
+            kind: OpKind::Source(src),
+            schema,
+        }
     }
 
     /// Project the input's rows down to `attrs`, in the order given.
@@ -369,17 +354,16 @@ impl Op {
     ///
     /// Returns `UnknownAttribute` if any name in `attrs` is missing
     /// from `input`'s schema.
-    pub fn project(
-        input: Self,
-        attrs: AttributeSet,
-    ) -> Result<Self, OpError> {
+    pub fn project(input: Self, attrs: AttributeSet) -> Result<Self, OpError> {
         use crate::schema::{Attribute, Schema};
         let input_schema = input.schema();
         let mut projected: Vec<Attribute> = Vec::with_capacity(attrs.as_slice().len());
         for name in attrs.as_slice() {
-            let attr = input_schema.find(name).ok_or_else(|| {
-                OpError::UnknownAttribute { attribute: name.clone() }
-            })?;
+            let attr = input_schema
+                .find(name)
+                .ok_or_else(|| OpError::UnknownAttribute {
+                    attribute: name.clone(),
+                })?;
             projected.push(attr.clone());
         }
         let schema = Schema::try_new(projected).map_err(OpError::Schema)?;
@@ -408,10 +392,7 @@ impl Op {
     /// or does not produce `Type::Bool`. Returns
     /// `AggregateOutsideSummarize` if the predicate contains an
     /// aggregate.
-    pub fn restrict(
-        input: Self,
-        predicate: Predicate,
-    ) -> Result<Self, OpError> {
+    pub fn restrict(input: Self, predicate: Predicate) -> Result<Self, OpError> {
         use crate::expression::contains_aggregate;
         use crate::ty::Type;
 
@@ -420,15 +401,12 @@ impl Op {
             if contains_aggregate(expr) {
                 return Err(OpError::AggregateOutsideSummarize);
             }
-            let ty = crate::infer::infer(expr, input.schema())
-                .map_err(OpError::Infer)?;
+            let ty = crate::infer::infer(expr, input.schema()).map_err(OpError::Infer)?;
             if ty != Type::Bool {
-                return Err(OpError::Infer(
-                    crate::infer::InferError::TypeMismatch {
-                        expected: Type::Bool,
-                        got: ty,
-                    },
-                ));
+                return Err(OpError::Infer(crate::infer::InferError::TypeMismatch {
+                    expected: Type::Bool,
+                    got: ty,
+                }));
             }
         }
         let schema = input.schema().clone();
@@ -448,11 +426,7 @@ impl Op {
     /// Returns `UnknownAttribute` if `from` is missing from the
     /// input schema, and `AttributeAlreadyExists` if `to` is already
     /// present.
-    pub fn rename(
-        input: Self,
-        from: AttributeName,
-        to: AttributeName,
-    ) -> Result<Self, OpError> {
+    pub fn rename(input: Self, from: AttributeName, to: AttributeName) -> Result<Self, OpError> {
         use crate::schema::{Attribute, Schema};
         let input_schema = input.schema();
         if !input_schema.contains(&from) {
@@ -466,7 +440,10 @@ impl Op {
             .iter()
             .map(|a| {
                 if a.name == from {
-                    Attribute { name: to.clone(), ty: a.ty.clone() }
+                    Attribute {
+                        name: to.clone(),
+                        ty: a.ty.clone(),
+                    }
                 } else {
                     a.clone()
                 }
@@ -524,11 +501,7 @@ impl Op {
     /// header somehow violates the schema invariants (defence in
     /// depth — the disjointness check above prevents this in
     /// practice).
-    pub fn extend(
-        input: Self,
-        name: AttributeName,
-        expr: Expression,
-    ) -> Result<Self, OpError> {
+    pub fn extend(input: Self, name: AttributeName, expr: Expression) -> Result<Self, OpError> {
         use crate::expression::contains_aggregate;
         use crate::schema::{Attribute, Schema};
 
@@ -538,11 +511,12 @@ impl Op {
         if contains_aggregate(&expr) {
             return Err(OpError::AggregateOutsideSummarize);
         }
-        let ty = crate::infer::infer(&expr, input.schema())
-            .map_err(OpError::Infer)?;
-        let mut combined: Vec<Attribute> =
-            input.schema().attributes().to_vec();
-        combined.push(Attribute { name: name.clone(), ty });
+        let ty = crate::infer::infer(&expr, input.schema()).map_err(OpError::Infer)?;
+        let mut combined: Vec<Attribute> = input.schema().attributes().to_vec();
+        combined.push(Attribute {
+            name: name.clone(),
+            ty,
+        });
         let schema = Schema::try_new(combined).map_err(OpError::Schema)?;
         Ok(Self {
             kind: OpKind::Extend {
@@ -572,11 +546,7 @@ impl Op {
     /// attribute is missing from `input.schema()`, `NotARelation`
     /// if it does not carry a `Type::Relation` shape, and `Schema`
     /// if the resulting header violates an invariant.
-    pub fn modify(
-        input: Self,
-        path: AnyPath,
-        sub: Self,
-    ) -> Result<Self, OpError> {
+    pub fn modify(input: Self, path: AnyPath, sub: Self) -> Result<Self, OpError> {
         use crate::path::PathStep;
         use crate::schema::{Attribute, Schema};
         use crate::ty::Type;
@@ -588,9 +558,12 @@ impl Op {
             return Err(OpError::UnsupportedPathShape);
         };
 
-        let attr_ref = input.schema().find(target).ok_or_else(|| {
-            OpError::UnknownAttribute { attribute: target.clone() }
-        })?;
+        let attr_ref = input
+            .schema()
+            .find(target)
+            .ok_or_else(|| OpError::UnknownAttribute {
+                attribute: target.clone(),
+            })?;
         if !matches!(attr_ref.ty, Type::Relation(_)) {
             return Err(OpError::NotARelation {
                 attribute: target.clone(),
@@ -643,10 +616,7 @@ impl Op {
     /// if it does not have a `Type::Relation` shape, and `Schema`
     /// if the resulting header violates an invariant (e.g. a
     /// nested attribute name collides with a sibling).
-    pub fn unnest(
-        input: Self,
-        path: AnyPath,
-    ) -> Result<Self, OpError> {
+    pub fn unnest(input: Self, path: AnyPath) -> Result<Self, OpError> {
         use crate::path::PathStep;
         use crate::schema::{Attribute, Schema};
         use crate::ty::Type;
@@ -658,9 +628,12 @@ impl Op {
             return Err(OpError::UnsupportedPathShape);
         };
 
-        let attr_ref = input.schema().find(target).ok_or_else(|| {
-            OpError::UnknownAttribute { attribute: target.clone() }
-        })?;
+        let attr_ref = input
+            .schema()
+            .find(target)
+            .ok_or_else(|| OpError::UnknownAttribute {
+                attribute: target.clone(),
+            })?;
         let Type::Relation(sub) = &attr_ref.ty else {
             return Err(OpError::NotARelation {
                 attribute: target.clone(),
@@ -701,31 +674,25 @@ impl Op {
     /// from `input.schema()`, `AttributeAlreadyExists` if `into`
     /// collides with an attribute that is not being nested, and
     /// `Schema` for the nested-header or output-header invariants.
-    pub fn nest(
-        input: Self,
-        attrs: AttributeSet,
-        into: AttributeName,
-    ) -> Result<Self, OpError> {
+    pub fn nest(input: Self, attrs: AttributeSet, into: AttributeName) -> Result<Self, OpError> {
         use crate::schema::{Attribute, Schema};
         use crate::ty::Type;
 
         let nested_names = attrs.as_slice();
-        let mut nested: Vec<Attribute> =
-            Vec::with_capacity(nested_names.len());
+        let mut nested: Vec<Attribute> = Vec::with_capacity(nested_names.len());
         for name in nested_names {
-            let attr = input.schema().find(name).ok_or_else(|| {
-                OpError::UnknownAttribute { attribute: name.clone() }
-            })?;
+            let attr = input
+                .schema()
+                .find(name)
+                .ok_or_else(|| OpError::UnknownAttribute {
+                    attribute: name.clone(),
+                })?;
             nested.push(attr.clone());
         }
         let sub_schema = Schema::try_new(nested).map_err(OpError::Schema)?;
 
-        if input.schema().contains(&into)
-            && !nested_names.contains(&into)
-        {
-            return Err(OpError::AttributeAlreadyExists {
-                attribute: into,
-            });
+        if input.schema().contains(&into) && !nested_names.contains(&into) {
+            return Err(OpError::AttributeAlreadyExists { attribute: into });
         }
 
         let mut remaining: Vec<Attribute> = input
@@ -763,18 +730,17 @@ impl Op {
     /// share an output name, `Infer` if an aggregate's input type
     /// is not admissible, and `Schema` if the constructed header
     /// somehow fails the invariants.
-    pub fn summarize(
-        input: Self,
-        by: GroupingSet,
-        aggs: NamedAggSet,
-    ) -> Result<Self, OpError> {
+    pub fn summarize(input: Self, by: GroupingSet, aggs: NamedAggSet) -> Result<Self, OpError> {
         use crate::schema::{Attribute, Schema};
         let mut combined: Vec<Attribute> =
             Vec::with_capacity(by.as_slice().len() + aggs.as_slice().len());
         for name in by.as_slice() {
-            let attr = input.schema().find(name).ok_or_else(|| {
-                OpError::UnknownAttribute { attribute: name.clone() }
-            })?;
+            let attr = input
+                .schema()
+                .find(name)
+                .ok_or_else(|| OpError::UnknownAttribute {
+                    attribute: name.clone(),
+                })?;
             combined.push(attr.clone());
         }
         for agg in aggs.as_slice() {
@@ -786,9 +752,11 @@ impl Op {
                     attribute: agg.name.clone(),
                 });
             }
-            let ty = crate::infer::agg_ty(&agg.agg, input.schema())
-                .map_err(OpError::Infer)?;
-            combined.push(Attribute { name: agg.name.clone(), ty });
+            let ty = crate::infer::agg_ty(&agg.agg, input.schema()).map_err(OpError::Infer)?;
+            combined.push(Attribute {
+                name: agg.name.clone(),
+                ty,
+            });
         }
         let schema = Schema::try_new(combined).map_err(OpError::Schema)?;
         Ok(Self {
@@ -893,12 +861,7 @@ impl Op {
     /// type-checking on the combined schema), or
     /// `AggregateOutsideSummarize` (theta predicate contains an
     /// aggregate).
-    pub fn join(
-        left: Self,
-        right: Self,
-        kind: JoinKind,
-        on: JoinOn,
-    ) -> Result<Self, OpError> {
+    pub fn join(left: Self, right: Self, kind: JoinKind, on: JoinOn) -> Result<Self, OpError> {
         use crate::expression::contains_aggregate;
         use crate::schema::{Attribute, Schema};
         use crate::ty::Type;
@@ -916,9 +879,7 @@ impl Op {
                         shared.push(l.name.clone());
                     }
                 }
-                if shared.is_empty()
-                    && matches!(kind, JoinKind::Inner)
-                {
+                if shared.is_empty() && matches!(kind, JoinKind::Inner) {
                     // Natural INNER join over disjoint schemas IS
                     // a Cartesian product; normalise. Outer-join
                     // kinds (LeftOuter / RightOuter / FullOuter)
@@ -929,8 +890,7 @@ impl Op {
                     // preserved.
                     return Self::product(left, right);
                 }
-                let mut combined: Vec<Attribute> =
-                    left.schema().attributes().to_vec();
+                let mut combined: Vec<Attribute> = left.schema().attributes().to_vec();
                 for r in right.schema().attributes() {
                     if !shared.contains(&r.name) {
                         combined.push(r.clone());
@@ -940,18 +900,16 @@ impl Op {
             }
             JoinOn::Equi(pairs) => {
                 for pair in pairs.as_slice() {
-                    let lt = left
-                        .schema()
-                        .find(&pair.left)
-                        .ok_or_else(|| OpError::UnknownAttribute {
+                    let lt = left.schema().find(&pair.left).ok_or_else(|| {
+                        OpError::UnknownAttribute {
                             attribute: pair.left.clone(),
-                        })?;
-                    let rt = right
-                        .schema()
-                        .find(&pair.right)
-                        .ok_or_else(|| OpError::UnknownAttribute {
+                        }
+                    })?;
+                    let rt = right.schema().find(&pair.right).ok_or_else(|| {
+                        OpError::UnknownAttribute {
                             attribute: pair.right.clone(),
-                        })?;
+                        }
+                    })?;
                     if lt.ty != rt.ty {
                         return Err(OpError::JoinTypeMismatch {
                             attribute: pair.left.clone(),
@@ -961,8 +919,7 @@ impl Op {
                 concat_disjoint_schemas(&left, &right)?
             }
             JoinOn::Theta(pred) => {
-                let combined =
-                    concat_disjoint_schemas(&left, &right)?;
+                let combined = concat_disjoint_schemas(&left, &right)?;
                 // Theta predicate's BoolExpression proof was
                 // established against some other schema. Re-verify
                 // against the joined schema; reject aggregates
@@ -972,15 +929,12 @@ impl Op {
                     if contains_aggregate(expr) {
                         return Err(OpError::AggregateOutsideSummarize);
                     }
-                    let ty = crate::infer::infer(expr, &combined)
-                        .map_err(OpError::Infer)?;
+                    let ty = crate::infer::infer(expr, &combined).map_err(OpError::Infer)?;
                     if ty != Type::Bool {
-                        return Err(OpError::Infer(
-                            crate::infer::InferError::TypeMismatch {
-                                expected: Type::Bool,
-                                got: ty,
-                            },
-                        ));
+                        return Err(OpError::Infer(crate::infer::InferError::TypeMismatch {
+                            expected: Type::Bool,
+                            got: ty,
+                        }));
                     }
                 }
                 combined
@@ -1117,10 +1071,7 @@ pub enum OpKind {
 // Helper: concatenate two operands' schemas into a single header,
 // requiring name disjointness. Shared by `Op::product`, the
 // equi-join branch of `Op::join`, and the theta-join branch.
-fn concat_disjoint_schemas(
-    left: &Op,
-    right: &Op,
-) -> Result<crate::schema::Schema, OpError> {
+fn concat_disjoint_schemas(left: &Op, right: &Op) -> Result<crate::schema::Schema, OpError> {
     use crate::schema::{Attribute, Schema};
     for r in right.schema().attributes() {
         if left.schema().contains(&r.name) {
@@ -1129,26 +1080,27 @@ fn concat_disjoint_schemas(
             });
         }
     }
-    let mut combined: Vec<Attribute> = Vec::with_capacity(
-        left.schema().attributes().len()
-            + right.schema().attributes().len(),
-    );
+    let mut combined: Vec<Attribute> =
+        Vec::with_capacity(left.schema().attributes().len() + right.schema().attributes().len());
     combined.extend(left.schema().attributes().iter().cloned());
     combined.extend(right.schema().attributes().iter().cloned());
     Schema::try_new(combined).map_err(OpError::Schema)
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::string::ToString;
     use alloc::vec;
     use alloc::vec::Vec;
 
     use super::{
-        AttributeSet, AttributeSetError, GroupingSet, GroupingSetError,
-        NamedAggSet, NamedAggSetError, Op, OpKind,
+        AttributeSet, AttributeSetError, GroupingSet, GroupingSetError, NamedAggSet,
+        NamedAggSetError, Op, OpKind,
     };
     use crate::identifier::{AttributeName, TableName};
     use crate::op_enums::{Agg, NamedAgg};
@@ -1236,8 +1188,14 @@ mod tests {
 
     fn two_attr_schema() -> Schema {
         Schema::try_new(vec![
-            Attribute { name: attr("id"), ty: Type::Int64 },
-            Attribute { name: attr("name"), ty: Type::String },
+            Attribute {
+                name: attr("id"),
+                ty: Type::Int64,
+            },
+            Attribute {
+                name: attr("name"),
+                ty: Type::String,
+            },
         ])
         .unwrap()
     }
@@ -1268,10 +1226,7 @@ mod tests {
         let attrs = AttributeSet::try_new(vec![attr("name")]).unwrap();
         let op = Op::project(input, attrs).unwrap();
         assert_eq!(op.schema().cardinality(), 1);
-        assert_eq!(
-            op.schema().attributes()[0].name.as_str(),
-            "name",
-        );
+        assert_eq!(op.schema().attributes()[0].name.as_str(), "name",);
     }
 
     #[test]
@@ -1301,8 +1256,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let op =
-            Op::restrict(input, Predicate::Expr(bool_expr)).unwrap();
+        let op = Op::restrict(input, Predicate::Expr(bool_expr)).unwrap();
         assert_eq!(op.schema().cardinality(), 2);
     }
 
@@ -1318,15 +1272,9 @@ mod tests {
             ty: Type::Bool,
         }])
         .unwrap();
-        let bool_expr = BoolExpression::try_new(
-            &other_schema,
-            Expression::Attr(attr("flag")),
-        )
-        .unwrap();
-        let result = Op::restrict(
-            two_attr_source(),
-            Predicate::Expr(bool_expr),
-        );
+        let bool_expr =
+            BoolExpression::try_new(&other_schema, Expression::Attr(attr("flag"))).unwrap();
+        let result = Op::restrict(two_attr_source(), Predicate::Expr(bool_expr));
         let Err(OpError::Infer(_)) = result else {
             unreachable!();
         };
@@ -1335,8 +1283,7 @@ mod tests {
     #[test]
     fn op_rename_swaps_attribute_in_schema() {
         let input = two_attr_source();
-        let op =
-            Op::rename(input, attr("name"), attr("full_name")).unwrap();
+        let op = Op::rename(input, attr("name"), attr("full_name")).unwrap();
         let names: alloc::vec::Vec<_> = op
             .schema()
             .attributes()
@@ -1404,9 +1351,10 @@ mod tests {
     #[test]
     fn op_product_concatenates_disjoint_schemas() {
         let other = Op::source(Source::Table {
-            schema: Schema::try_new(vec![
-                Attribute { name: attr("city"), ty: Type::String },
-            ])
+            schema: Schema::try_new(vec![Attribute {
+                name: attr("city"),
+                ty: Type::String,
+            }])
             .unwrap(),
             name: TableName::try_new("places".to_string()).unwrap(),
         });
@@ -1425,8 +1373,7 @@ mod tests {
     fn op_product_rejects_overlapping_schemas() {
         use super::OpError;
         let result = Op::product(two_attr_source(), two_attr_source());
-        let Err(OpError::DuplicateAcrossOperands { attribute }) = result
-        else {
+        let Err(OpError::DuplicateAcrossOperands { attribute }) = result else {
             unreachable!();
         };
         assert_eq!(attribute.as_str(), "id");
@@ -1437,8 +1384,14 @@ mod tests {
     fn right_orders_source() -> Op {
         Op::source(Source::Table {
             schema: Schema::try_new(vec![
-                Attribute { name: attr("order_id"), ty: Type::Int64 },
-                Attribute { name: attr("user_id"), ty: Type::Int64 },
+                Attribute {
+                    name: attr("order_id"),
+                    ty: Type::Int64,
+                },
+                Attribute {
+                    name: attr("user_id"),
+                    ty: Type::Int64,
+                },
             ])
             .unwrap(),
             name: TableName::try_new("orders".to_string()).unwrap(),
@@ -1450,8 +1403,14 @@ mod tests {
         // Left has (id, name); right has (id, total).
         let right = Op::source(Source::Table {
             schema: Schema::try_new(vec![
-                Attribute { name: attr("id"), ty: Type::Int64 },
-                Attribute { name: attr("total"), ty: Type::Int64 },
+                Attribute {
+                    name: attr("id"),
+                    ty: Type::Int64,
+                },
+                Attribute {
+                    name: attr("total"),
+                    ty: Type::Int64,
+                },
             ])
             .unwrap(),
             name: TableName::try_new("orders".to_string()).unwrap(),
@@ -1498,12 +1457,10 @@ mod tests {
 
     #[test]
     fn op_join_equi_concatenates_when_disjoint() {
-        let pairs = crate::join::EquiPairs::try_new(vec![
-            crate::join::EquiPair {
-                left: attr("id"),
-                right: attr("user_id"),
-            },
-        ])
+        let pairs = crate::join::EquiPairs::try_new(vec![crate::join::EquiPair {
+            left: attr("id"),
+            right: attr("user_id"),
+        }])
         .unwrap();
         let op = Op::join(
             two_attr_source(),
@@ -1518,12 +1475,10 @@ mod tests {
     #[test]
     fn op_join_equi_rejects_unknown_attr() {
         use super::OpError;
-        let pairs = crate::join::EquiPairs::try_new(vec![
-            crate::join::EquiPair {
-                left: attr("missing"),
-                right: attr("user_id"),
-            },
-        ])
+        let pairs = crate::join::EquiPairs::try_new(vec![crate::join::EquiPair {
+            left: attr("missing"),
+            right: attr("user_id"),
+        }])
         .unwrap();
         let result = Op::join(
             two_attr_source(),
@@ -1541,12 +1496,10 @@ mod tests {
     fn op_join_equi_rejects_type_mismatch() {
         use super::OpError;
         // Left.name: String, right.user_id: Int64 — mismatched.
-        let pairs = crate::join::EquiPairs::try_new(vec![
-            crate::join::EquiPair {
-                left: attr("name"),
-                right: attr("user_id"),
-            },
-        ])
+        let pairs = crate::join::EquiPairs::try_new(vec![crate::join::EquiPair {
+            left: attr("name"),
+            right: attr("user_id"),
+        }])
         .unwrap();
         let result = Op::join(
             two_attr_source(),
@@ -1616,18 +1569,28 @@ mod tests {
 
     #[test]
     fn op_join_theta_admits_bool_predicate_over_combined_schema() {
-        use crate::expression::{
-            BoolExpression, Expression, Predicate,
-        };
+        use crate::expression::{BoolExpression, Expression, Predicate};
         use crate::op_enums::BinOp;
 
         let left = two_attr_source();
         let right = right_orders_source();
         let combined = Schema::try_new(vec![
-            Attribute { name: attr("id"), ty: Type::Int64 },
-            Attribute { name: attr("name"), ty: Type::String },
-            Attribute { name: attr("order_id"), ty: Type::Int64 },
-            Attribute { name: attr("user_id"), ty: Type::Int64 },
+            Attribute {
+                name: attr("id"),
+                ty: Type::Int64,
+            },
+            Attribute {
+                name: attr("name"),
+                ty: Type::String,
+            },
+            Attribute {
+                name: attr("order_id"),
+                ty: Type::Int64,
+            },
+            Attribute {
+                name: attr("user_id"),
+                ty: Type::Int64,
+            },
         ])
         .unwrap();
         let bool_expr = BoolExpression::try_new(
@@ -1652,9 +1615,7 @@ mod tests {
     #[test]
     fn op_join_theta_rejects_predicate_with_unknown_attr() {
         use super::OpError;
-        use crate::expression::{
-            BoolExpression, Expression, Predicate,
-        };
+        use crate::expression::{BoolExpression, Expression, Predicate};
 
         // Predicate refers to 'flag' which is in neither side's
         // schema. The BoolExpression built against an unrelated
@@ -1665,11 +1626,8 @@ mod tests {
             ty: Type::Bool,
         }])
         .unwrap();
-        let bool_expr = BoolExpression::try_new(
-            &other_schema,
-            Expression::Attr(attr("flag")),
-        )
-        .unwrap();
+        let bool_expr =
+            BoolExpression::try_new(&other_schema, Expression::Attr(attr("flag"))).unwrap();
         let result = Op::join(
             two_attr_source(),
             right_orders_source(),
@@ -1684,9 +1642,7 @@ mod tests {
     #[test]
     fn op_join_theta_rejects_aggregate_predicate() {
         use super::OpError;
-        use crate::expression::{
-            BoolExpression, Expression, Predicate,
-        };
+        use crate::expression::{BoolExpression, Expression, Predicate};
         use crate::op_enums::{Agg, BinOp};
         use crate::ty::Value;
 
@@ -1705,8 +1661,7 @@ mod tests {
             alloc::boxed::Box::new(Expression::Agg(Agg::Sum(attr("count")))),
             alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
         );
-        let bool_expr =
-            BoolExpression::try_new(&bool_expr_schema, expr).unwrap();
+        let bool_expr = BoolExpression::try_new(&bool_expr_schema, expr).unwrap();
         let result = Op::join(
             two_attr_source(),
             right_orders_source(),
@@ -1774,9 +1729,7 @@ mod tests {
     #[test]
     fn op_restrict_rejects_aggregate_predicate() {
         use super::OpError;
-        use crate::expression::{
-            BoolExpression, Expression, Predicate,
-        };
+        use crate::expression::{BoolExpression, Expression, Predicate};
         use crate::op_enums::{Agg, BinOp};
         use crate::ty::Value;
         // Build a Bool-typed expression that contains an aggregate
@@ -1785,17 +1738,12 @@ mod tests {
             two_attr_source().schema(),
             Expression::BinOp(
                 BinOp::Gt,
-                alloc::boxed::Box::new(Expression::Agg(Agg::Sum(
-                    attr("id"),
-                ))),
+                alloc::boxed::Box::new(Expression::Agg(Agg::Sum(attr("id")))),
                 alloc::boxed::Box::new(Expression::Lit(Value::Int64(0))),
             ),
         )
         .unwrap();
-        let result = Op::restrict(
-            two_attr_source(),
-            Predicate::Expr(bool_expr),
-        );
+        let result = Op::restrict(two_attr_source(), Predicate::Expr(bool_expr));
         assert_eq!(result.unwrap_err(), OpError::AggregateOutsideSummarize);
     }
 
@@ -1803,8 +1751,7 @@ mod tests {
 
     #[test]
     fn op_summarize_builds_schema_with_by_and_aggs() {
-        let by =
-            GroupingSet::try_new(vec![attr("name")]).unwrap();
+        let by = GroupingSet::try_new(vec![attr("name")]).unwrap();
         let aggs = NamedAggSet::try_new(vec![
             NamedAgg {
                 name: attr("count"),
@@ -1843,8 +1790,7 @@ mod tests {
     #[test]
     fn op_summarize_rejects_unknown_by_attr() {
         use super::OpError;
-        let by =
-            GroupingSet::try_new(vec![attr("missing")]).unwrap();
+        let by = GroupingSet::try_new(vec![attr("missing")]).unwrap();
         let aggs = NamedAggSet::try_new(vec![NamedAgg {
             name: attr("count"),
             agg: Agg::Count(None),
@@ -1893,9 +1839,18 @@ mod tests {
     fn three_attr_source() -> Op {
         Op::source(Source::Table {
             schema: Schema::try_new(vec![
-                Attribute { name: attr("id"), ty: Type::Int64 },
-                Attribute { name: attr("name"), ty: Type::String },
-                Attribute { name: attr("city"), ty: Type::String },
+                Attribute {
+                    name: attr("id"),
+                    ty: Type::Int64,
+                },
+                Attribute {
+                    name: attr("name"),
+                    ty: Type::String,
+                },
+                Attribute {
+                    name: attr("city"),
+                    ty: Type::String,
+                },
             ])
             .unwrap(),
             name: TableName::try_new("users".to_string()).unwrap(),
@@ -1904,8 +1859,7 @@ mod tests {
 
     #[test]
     fn op_nest_bundles_attributes_under_target_name() {
-        let attrs =
-            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        let attrs = AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
         let op = Op::nest(three_attr_source(), attrs, attr("profile")).unwrap();
         let names: alloc::vec::Vec<_> = op
             .schema()
@@ -1918,11 +1872,8 @@ mod tests {
         let crate::ty::Type::Relation(sub) = &profile.ty else {
             unreachable!();
         };
-        let sub_names: alloc::vec::Vec<_> = sub
-            .attributes()
-            .iter()
-            .map(|a| a.name.as_str())
-            .collect();
+        let sub_names: alloc::vec::Vec<_> =
+            sub.attributes().iter().map(|a| a.name.as_str()).collect();
         assert_eq!(sub_names, vec!["name", "city"]);
     }
 
@@ -1940,8 +1891,7 @@ mod tests {
     #[test]
     fn op_nest_rejects_into_colliding_with_kept_attr() {
         use super::OpError;
-        let attrs =
-            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        let attrs = AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
         let result = Op::nest(three_attr_source(), attrs, attr("id"));
         let Err(OpError::AttributeAlreadyExists { attribute }) = result else {
             unreachable!();
@@ -1954,8 +1904,7 @@ mod tests {
         // When 'name' is itself being nested, reusing 'name' as
         // the target name does not collide (the old 'name' attr is
         // removed before the new nested attr is appended).
-        let attrs =
-            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        let attrs = AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
         let op = Op::nest(three_attr_source(), attrs, attr("name")).unwrap();
         let names: alloc::vec::Vec<_> = op
             .schema()
@@ -1971,17 +1920,15 @@ mod tests {
     fn nested_source() -> Op {
         // Build via Op::nest so the nested-relation shape is
         // identical to what a user would produce.
-        let attrs =
-            AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
+        let attrs = AttributeSet::try_new(vec![attr("name"), attr("city")]).unwrap();
         Op::nest(three_attr_source(), attrs, attr("profile")).unwrap()
     }
 
     #[test]
     fn op_unnest_flattens_nested_relation() {
         use crate::path::{AnyPath, LensPath, PathStep};
-        let path = AnyPath::Lens(
-            LensPath::try_new(vec![PathStep::Field(attr("profile"))]).unwrap(),
-        );
+        let path =
+            AnyPath::Lens(LensPath::try_new(vec![PathStep::Field(attr("profile"))]).unwrap());
         let op = Op::unnest(nested_source(), path).unwrap();
         let names: alloc::vec::Vec<_> = op
             .schema()
@@ -1997,11 +1944,7 @@ mod tests {
         use super::OpError;
         use crate::path::{AnyPath, PathStep, TraversalPath};
         let path = AnyPath::Traversal(
-            TraversalPath::try_new(vec![
-                PathStep::Field(attr("profile")),
-                PathStep::Each,
-            ])
-            .unwrap(),
+            TraversalPath::try_new(vec![PathStep::Field(attr("profile")), PathStep::Each]).unwrap(),
         );
         let result = Op::unnest(nested_source(), path);
         assert_eq!(result.unwrap_err(), OpError::UnsupportedPathShape);
@@ -2011,9 +1954,8 @@ mod tests {
     fn op_unnest_rejects_unknown_attr() {
         use super::OpError;
         use crate::path::{AnyPath, LensPath, PathStep};
-        let path = AnyPath::Lens(
-            LensPath::try_new(vec![PathStep::Field(attr("missing"))]).unwrap(),
-        );
+        let path =
+            AnyPath::Lens(LensPath::try_new(vec![PathStep::Field(attr("missing"))]).unwrap());
         let result = Op::unnest(nested_source(), path);
         let Err(OpError::UnknownAttribute { attribute }) = result else {
             unreachable!();
@@ -2026,9 +1968,7 @@ mod tests {
         use super::OpError;
         use crate::path::{AnyPath, LensPath, PathStep};
         // three_attr_source has `id` as Int64 — not a relation.
-        let path = AnyPath::Lens(
-            LensPath::try_new(vec![PathStep::Field(attr("id"))]).unwrap(),
-        );
+        let path = AnyPath::Lens(LensPath::try_new(vec![PathStep::Field(attr("id"))]).unwrap());
         let result = Op::unnest(three_attr_source(), path);
         let Err(OpError::NotARelation { attribute }) = result else {
             unreachable!();
@@ -2053,9 +1993,8 @@ mod tests {
             .unwrap(),
             name: TableName::try_new("inner".to_string()).unwrap(),
         });
-        let path = AnyPath::Lens(
-            LensPath::try_new(vec![PathStep::Field(attr("profile"))]).unwrap(),
-        );
+        let path =
+            AnyPath::Lens(LensPath::try_new(vec![PathStep::Field(attr("profile"))]).unwrap());
         let op = Op::modify(input, path, sub).unwrap();
         let profile = op.schema().find(&attr("profile")).unwrap();
         let crate::ty::Type::Relation(sub_schema) = &profile.ty else {
@@ -2081,9 +2020,8 @@ mod tests {
             .unwrap(),
             name: TableName::try_new("inner".to_string()).unwrap(),
         });
-        let path = AnyPath::Lens(
-            LensPath::try_new(vec![PathStep::Field(attr("missing"))]).unwrap(),
-        );
+        let path =
+            AnyPath::Lens(LensPath::try_new(vec![PathStep::Field(attr("missing"))]).unwrap());
         let result = Op::modify(nested_source(), path, sub);
         let Err(OpError::UnknownAttribute { attribute }) = result else {
             unreachable!();
@@ -2103,9 +2041,7 @@ mod tests {
             .unwrap(),
             name: TableName::try_new("inner".to_string()).unwrap(),
         });
-        let path = AnyPath::Lens(
-            LensPath::try_new(vec![PathStep::Field(attr("id"))]).unwrap(),
-        );
+        let path = AnyPath::Lens(LensPath::try_new(vec![PathStep::Field(attr("id"))]).unwrap());
         let result = Op::modify(three_attr_source(), path, sub);
         let Err(OpError::NotARelation { attribute }) = result else {
             unreachable!();

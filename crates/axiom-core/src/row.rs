@@ -53,8 +53,11 @@ impl Row {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;

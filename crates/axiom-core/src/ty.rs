@@ -10,8 +10,8 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use whittle::primitive::{Finite, LenItems};
 use whittle::Refined;
+use whittle::primitive::{Finite, LenItems};
 
 use crate::limits::{MAX_ARRAY_LEN, MAX_ROWS_IN_AST};
 

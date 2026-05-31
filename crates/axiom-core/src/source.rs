@@ -99,17 +99,10 @@ impl MemorySource {
     /// collection, and `RowMismatch { row_index, source }` for the
     /// first row whose values do not conform to the schema (width
     /// or per-position type).
-    pub fn try_new(
-        schema: Schema,
-        raw_rows: Vec<Row>,
-    ) -> Result<Self, MemorySourceError> {
+    pub fn try_new(schema: Schema, raw_rows: Vec<Row>) -> Result<Self, MemorySourceError> {
         for (row_index, row) in raw_rows.iter().enumerate() {
-            crate::infer::row_matches_schema(row, &schema).map_err(
-                |source| MemorySourceError::RowMismatch {
-                    row_index,
-                    source,
-                },
-            )?;
+            crate::infer::row_matches_schema(row, &schema)
+                .map_err(|source| MemorySourceError::RowMismatch { row_index, source })?;
         }
         let rows = Rows::try_new(raw_rows).map_err(MemorySourceError::Rows)?;
         Ok(Self { schema, rows })
@@ -153,10 +146,7 @@ impl Source {
     /// # Errors
     ///
     /// Returns the underlying `MemorySourceError`.
-    pub fn try_memory(
-        schema: Schema,
-        raw_rows: Vec<Row>,
-    ) -> Result<Self, MemorySourceError> {
+    pub fn try_memory(schema: Schema, raw_rows: Vec<Row>) -> Result<Self, MemorySourceError> {
         MemorySource::try_new(schema, raw_rows).map(Self::Memory)
     }
 
@@ -174,8 +164,11 @@ impl Source {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::string::ToString;
     use alloc::vec;
@@ -215,9 +208,7 @@ mod tests {
     #[test]
     fn overlength_rows_rejected() {
         let row = Row::try_new(vec![Value::Int64(1)]).unwrap();
-        let too_many: Vec<Row> = (0..=MAX_ROWS_IN_AST)
-            .map(|_| row.clone())
-            .collect();
+        let too_many: Vec<Row> = (0..=MAX_ROWS_IN_AST).map(|_| row.clone()).collect();
         let result = Rows::try_new(too_many);
         assert!(matches!(
             result.unwrap_err(),
@@ -238,21 +229,21 @@ mod tests {
     #[test]
     fn memory_source_rejects_row_with_wrong_width() {
         // schema() has one Int64 attr. A two-value row mismatches.
-        let bad_row = Row::try_new(vec![
-            Value::Int64(1),
-            Value::Int64(2),
-        ])
-        .unwrap();
+        let bad_row = Row::try_new(vec![Value::Int64(1), Value::Int64(2)]).unwrap();
         let result = Source::try_memory(schema(), vec![bad_row]);
         let Err(MemorySourceError::RowMismatch {
             row_index: 0,
             source,
-        }) = result else {
+        }) = result
+        else {
             unreachable!();
         };
         assert!(matches!(
             source,
-            ValueTypeError::RowWidth { expected: 1, actual: 2 },
+            ValueTypeError::RowWidth {
+                expected: 1,
+                actual: 2
+            },
         ));
     }
 
@@ -264,7 +255,8 @@ mod tests {
         let Err(MemorySourceError::RowMismatch {
             row_index: 0,
             source: ValueTypeError::RelationField { position: 0, .. },
-        }) = result else {
+        }) = result
+        else {
             unreachable!();
         };
     }
@@ -291,13 +283,10 @@ mod tests {
             ty: Type::Array(Box::new(Type::Int32)),
         }])
         .unwrap();
-        let bad_value = Value::Array(
-            Refined::try_new(vec![Value::String("oops".to_string())])
-                .unwrap(),
-        );
+        let bad_value =
+            Value::Array(Refined::try_new(vec![Value::String("oops".to_string())]).unwrap());
         let bad_row = Row::try_new(vec![bad_value]).unwrap();
-        let result =
-            Source::try_memory(nested_schema, vec![bad_row]);
+        let result = Source::try_memory(nested_schema, vec![bad_row]);
         let Err(MemorySourceError::RowMismatch {
             row_index: 0,
             source:
@@ -309,8 +298,10 @@ mod tests {
         else {
             unreachable!();
         };
-        let ValueTypeError::ArrayElement { index: 0, source: leaf } =
-            *nested
+        let ValueTypeError::ArrayElement {
+            index: 0,
+            source: leaf,
+        } = *nested
         else {
             unreachable!();
         };

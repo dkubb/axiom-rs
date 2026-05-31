@@ -13,8 +13,8 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use thiserror::Error;
-use whittle::primitive::{CollectionError, LenItems};
 use whittle::Refined;
+use whittle::primitive::{CollectionError, LenItems};
 
 use crate::identifier::AttributeName;
 use crate::limit::BoundedIndex;
@@ -153,7 +153,10 @@ impl LensPath {
                 return Err(PathError::LensWithEach { index });
             }
         }
-        Ok(Self { steps: refined, _kind: PhantomData })
+        Ok(Self {
+            steps: refined,
+            _kind: PhantomData,
+        })
     }
 }
 
@@ -176,7 +179,10 @@ impl TraversalPath {
         if !has_each {
             return Err(PathError::TraversalWithoutEach);
         }
-        Ok(Self { steps: refined, _kind: PhantomData })
+        Ok(Self {
+            steps: refined,
+            _kind: PhantomData,
+        })
     }
 }
 
@@ -204,16 +210,17 @@ impl<K: Kind> Path<K> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::string::ToString;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::{
-        AnyPath, LensPath, PathError, PathStep, TraversalPath,
-    };
+    use super::{AnyPath, LensPath, PathError, PathStep, TraversalPath};
     use crate::identifier::AttributeName;
     use crate::limit::BoundedIndex;
     use crate::limits::MAX_PATH_STEPS;
@@ -244,10 +251,7 @@ mod tests {
 
     #[test]
     fn lens_rejects_each_step() {
-        let result = LensPath::try_new(vec![
-            PathStep::Field(attr("posts")),
-            PathStep::Each,
-        ]);
+        let result = LensPath::try_new(vec![PathStep::Field(attr("posts")), PathStep::Each]);
         assert!(matches!(
             result.unwrap_err(),
             PathError::LensWithEach { index: 1 },
@@ -256,27 +260,20 @@ mod tests {
 
     #[test]
     fn traversal_requires_each_step() {
-        let p = TraversalPath::try_new(vec![
-            PathStep::Field(attr("posts")),
-            PathStep::Each,
-        ])
-        .unwrap();
+        let p =
+            TraversalPath::try_new(vec![PathStep::Field(attr("posts")), PathStep::Each]).unwrap();
         assert_eq!(p.len(), 2);
     }
 
     #[test]
     fn traversal_rejects_lens_only() {
-        let result = TraversalPath::try_new(vec![
-            PathStep::Field(attr("posts")),
-        ]);
+        let result = TraversalPath::try_new(vec![PathStep::Field(attr("posts"))]);
         assert_eq!(result.unwrap_err(), PathError::TraversalWithoutEach);
     }
 
     #[test]
     fn path_step_count_bounded() {
-        let too_many: Vec<PathStep> = (0..=MAX_PATH_STEPS)
-            .map(|_| PathStep::Each)
-            .collect();
+        let too_many: Vec<PathStep> = (0..=MAX_PATH_STEPS).map(|_| PathStep::Each).collect();
         let result = TraversalPath::try_new(too_many);
         assert!(matches!(result.unwrap_err(), PathError::Length(_)));
     }
@@ -290,11 +287,8 @@ mod tests {
     #[test]
     fn anypath_carries_kind() {
         let lens = LensPath::try_new(vec![PathStep::Field(attr("a"))]).unwrap();
-        let trav = TraversalPath::try_new(vec![
-            PathStep::Field(attr("a")),
-            PathStep::Each,
-        ])
-        .unwrap();
+        let trav =
+            TraversalPath::try_new(vec![PathStep::Field(attr("a")), PathStep::Each]).unwrap();
         let AnyPath::Lens(_) = AnyPath::Lens(lens) else {
             unreachable!("expected Lens variant");
         };

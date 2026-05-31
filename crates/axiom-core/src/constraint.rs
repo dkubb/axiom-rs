@@ -12,9 +12,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use thiserror::Error;
-use whittle::primitive::{
-    CollectionError, KeyOf, LenItems, UniqueByKey,
-};
+use whittle::primitive::{CollectionError, KeyOf, LenItems, UniqueByKey};
 use whittle::{And, Refined};
 
 use crate::canonical::CanonicalPredicate;
@@ -78,14 +76,10 @@ impl AttributeConstraint {
     ) -> Result<Self, AttributeConstraintError> {
         let free = predicate.free_attributes();
         if free.is_empty() {
-            return Err(AttributeConstraintError::ConstantPredicate {
-                scope: attr,
-            });
+            return Err(AttributeConstraintError::ConstantPredicate { scope: attr });
         }
         if !free.contains(&attr) {
-            return Err(AttributeConstraintError::MissingScope {
-                scope: attr,
-            });
+            return Err(AttributeConstraintError::MissingScope { scope: attr });
         }
         for name in &free {
             if name != &attr {
@@ -199,15 +193,9 @@ impl From<CollectionError> for ConstraintSetError {
         // enum: a length failure surfaces as `LenOutOfRange`, a
         // per-attribute uniqueness failure as `DuplicateKey`.
         match err {
-            CollectionError::LenOutOfRange { .. } => {
-                Self::PerAttributeLength(err)
-            }
-            CollectionError::DuplicateKey { .. } => {
-                Self::PerAttributeDuplicate(err)
-            }
-            _ => unreachable!(
-                "AttrConstraintsRule emits only LenOutOfRange / DuplicateKey"
-            ),
+            CollectionError::LenOutOfRange { .. } => Self::PerAttributeLength(err),
+            CollectionError::DuplicateKey { .. } => Self::PerAttributeDuplicate(err),
+            _ => unreachable!("AttrConstraintsRule emits only LenOutOfRange / DuplicateKey"),
         }
     }
 }
@@ -225,8 +213,7 @@ impl ConstraintSet {
         per_row: Vec<RowConstraint>,
     ) -> Result<Self, ConstraintSetError> {
         let per_attr = Refined::try_new(per_attr)?;
-        let per_row = Refined::try_new(per_row)
-            .map_err(ConstraintSetError::PerRow)?;
+        let per_row = Refined::try_new(per_row).map_err(ConstraintSetError::PerRow)?;
         Ok(Self { per_attr, per_row })
     }
 
@@ -234,8 +221,7 @@ impl ConstraintSet {
     /// declares no invariants.
     #[must_use]
     pub fn empty() -> Self {
-        Self::try_new(Vec::new(), Vec::new())
-            .unwrap_or_else(|_| unreachable!("0 fits in 0..MAX"))
+        Self::try_new(Vec::new(), Vec::new()).unwrap_or_else(|_| unreachable!("0 fits in 0..MAX"))
     }
 
     /// Per-attribute constraints.
@@ -260,16 +246,19 @@ impl ConstraintSet {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::boxed::Box;
     use alloc::string::ToString;
     use alloc::vec;
 
     use super::{
-        AttributeConstraint, AttributeConstraintError, ConstraintSet,
-        ConstraintSetError, RowConstraint,
+        AttributeConstraint, AttributeConstraintError, ConstraintSet, ConstraintSetError,
+        RowConstraint,
     };
     use crate::canonical::CanonicalPredicate;
     use crate::expression::Expression;
@@ -284,8 +273,14 @@ mod tests {
 
     fn person_schema() -> Schema {
         Schema::try_new(vec![
-            Attribute { name: attr("age"), ty: Type::Int32 },
-            Attribute { name: attr("retire_at"), ty: Type::Int32 },
+            Attribute {
+                name: attr("age"),
+                ty: Type::Int32,
+            },
+            Attribute {
+                name: attr("retire_at"),
+                ty: Type::Int32,
+            },
         ])
         .unwrap()
     }
@@ -316,17 +311,13 @@ mod tests {
 
     #[test]
     fn attribute_constraint_accepts_matching_scope() {
-        let c = AttributeConstraint::try_new(attr("age"), pred_age_ge_18())
-            .unwrap();
+        let c = AttributeConstraint::try_new(attr("age"), pred_age_ge_18()).unwrap();
         assert_eq!(c.attribute().as_str(), "age");
     }
 
     #[test]
     fn attribute_constraint_rejects_foreign_reference() {
-        let result = AttributeConstraint::try_new(
-            attr("age"),
-            pred_age_lt_retire(),
-        );
+        let result = AttributeConstraint::try_new(attr("age"), pred_age_lt_retire());
         assert!(matches!(
             result.unwrap_err(),
             AttributeConstraintError::ForeignAttribute { .. },
@@ -335,11 +326,9 @@ mod tests {
 
     #[test]
     fn attribute_constraint_rejects_constant_predicate() {
-        let pred = CanonicalPredicate::try_new(
-            &person_schema(),
-            Expression::Lit(Value::Bool(true)),
-        )
-        .unwrap();
+        let pred =
+            CanonicalPredicate::try_new(&person_schema(), Expression::Lit(Value::Bool(true)))
+                .unwrap();
         let result = AttributeConstraint::try_new(attr("age"), pred);
         assert!(matches!(
             result.unwrap_err(),
@@ -384,14 +373,9 @@ mod tests {
 
     #[test]
     fn constraint_set_holds_both_scopes() {
-        let attr_c = AttributeConstraint::try_new(
-            attr("age"),
-            pred_age_ge_18(),
-        )
-        .unwrap();
+        let attr_c = AttributeConstraint::try_new(attr("age"), pred_age_ge_18()).unwrap();
         let row_c = RowConstraint::new(pred_age_lt_retire());
-        let cs =
-            ConstraintSet::try_new(vec![attr_c], vec![row_c]).unwrap();
+        let cs = ConstraintSet::try_new(vec![attr_c], vec![row_c]).unwrap();
         assert!(!cs.is_empty());
         assert_eq!(cs.per_attribute().len(), 1);
         assert_eq!(cs.per_row().len(), 1);
@@ -399,16 +383,8 @@ mod tests {
 
     #[test]
     fn constraint_set_rejects_duplicate_attribute_constraints() {
-        let c1 = AttributeConstraint::try_new(
-            attr("age"),
-            pred_age_ge_18(),
-        )
-        .unwrap();
-        let c2 = AttributeConstraint::try_new(
-            attr("age"),
-            pred_age_ge_18(),
-        )
-        .unwrap();
+        let c1 = AttributeConstraint::try_new(attr("age"), pred_age_ge_18()).unwrap();
+        let c2 = AttributeConstraint::try_new(attr("age"), pred_age_ge_18()).unwrap();
         let result = ConstraintSet::try_new(vec![c1, c2], vec![]);
         assert!(matches!(
             result.unwrap_err(),

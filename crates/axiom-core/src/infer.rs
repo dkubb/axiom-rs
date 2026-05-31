@@ -85,10 +85,7 @@ pub enum InferError {
 /// # Errors
 ///
 /// Returns `InferError` for any of the documented failure modes.
-pub fn infer(
-    expr: &Expression,
-    schema: &Schema,
-) -> Result<Type, InferError> {
+pub fn infer(expr: &Expression, schema: &Schema) -> Result<Type, InferError> {
     match expr {
         Expression::Attr(name) => schema
             .find(name)
@@ -209,10 +206,7 @@ pub enum ValueTypeError {
 /// shape disagreement, with `ArrayElement` / `RelationRow` /
 /// `Optional` wrappers naming the path of the first descent that
 /// diverged.
-pub fn value_matches_type(
-    value: &Value,
-    ty: &Type,
-) -> Result<(), ValueTypeError> {
+pub fn value_matches_type(value: &Value, ty: &Type) -> Result<(), ValueTypeError> {
     use alloc::boxed::Box;
     match (value, ty) {
         (Value::Bool(_), Type::Bool)
@@ -231,22 +225,18 @@ pub fn value_matches_type(
         }
         (Value::Array(values), Type::Array(inner_ty)) => {
             for (index, v) in values.as_inner().iter().enumerate() {
-                value_matches_type(v, inner_ty).map_err(|e| {
-                    ValueTypeError::ArrayElement {
-                        index,
-                        source: Box::new(e),
-                    }
+                value_matches_type(v, inner_ty).map_err(|e| ValueTypeError::ArrayElement {
+                    index,
+                    source: Box::new(e),
                 })?;
             }
             Ok(())
         }
         (Value::Relation(rows), Type::Relation(schema)) => {
             for (index, row) in rows.as_inner().iter().enumerate() {
-                row_matches_schema(row, schema).map_err(|e| {
-                    ValueTypeError::RelationRow {
-                        index,
-                        source: Box::new(e),
-                    }
+                row_matches_schema(row, schema).map_err(|e| ValueTypeError::RelationRow {
+                    index,
+                    source: Box::new(e),
                 })?;
             }
             Ok(())
@@ -262,10 +252,7 @@ pub fn value_matches_type(
 ///
 /// Returns `RowWidth` for a width mismatch, otherwise the
 /// structural error from the first non-matching value.
-pub fn row_matches_schema(
-    row: &crate::row::Row,
-    schema: &Schema,
-) -> Result<(), ValueTypeError> {
+pub fn row_matches_schema(row: &crate::row::Row, schema: &Schema) -> Result<(), ValueTypeError> {
     use alloc::boxed::Box;
     let expected = schema.cardinality();
     let actual = row.len();
@@ -278,11 +265,9 @@ pub fn row_matches_schema(
         .zip(schema.attributes().iter())
         .enumerate()
     {
-        value_matches_type(value, &attribute.ty).map_err(|e| {
-            ValueTypeError::RelationField {
-                position,
-                source: Box::new(e),
-            }
+        value_matches_type(value, &attribute.ty).map_err(|e| ValueTypeError::RelationField {
+            position,
+            source: Box::new(e),
         })?;
     }
     Ok(())
@@ -354,10 +339,7 @@ pub fn agg_ty(agg: &Agg, schema: &Schema) -> Result<Type, InferError> {
     }
 }
 
-fn lookup(
-    schema: &Schema,
-    name: &AttributeName,
-) -> Result<Type, InferError> {
+fn lookup(schema: &Schema, name: &AttributeName) -> Result<Type, InferError> {
     schema
         .find(name)
         .map(|a| a.ty.clone())
@@ -365,9 +347,7 @@ fn lookup(
 }
 
 fn infer_binop(op: BinOp, lt: Type, rt: Type) -> Result<Type, InferError> {
-    use BinOp::{
-        Add, And, Concat, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Or, Sub,
-    };
+    use BinOp::{Add, And, Concat, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Or, Sub};
     match op {
         Add | Sub | Mul | Div => {
             require_same(&lt, &rt)?;
@@ -448,14 +428,17 @@ const fn is_numeric(ty: &Type) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::boxed::Box;
     use alloc::string::ToString;
     use alloc::vec;
 
-    use super::{agg_ty, infer, infer_value, InferError};
+    use super::{InferError, agg_ty, infer, infer_value};
     use crate::expression::Expression;
     use crate::identifier::AttributeName;
     use crate::op_enums::{Agg, BinOp, UnOp};
@@ -468,8 +451,14 @@ mod tests {
 
     fn two_attr_schema() -> Schema {
         Schema::try_new(vec![
-            Attribute { name: attr("age"), ty: Type::Int32 },
-            Attribute { name: attr("name"), ty: Type::String },
+            Attribute {
+                name: attr("age"),
+                ty: Type::Int32,
+            },
+            Attribute {
+                name: attr("name"),
+                ty: Type::String,
+            },
         ])
         .unwrap()
     }
@@ -478,18 +467,12 @@ mod tests {
 
     #[test]
     fn literal_bool_infers_bool() {
-        assert_eq!(
-            infer_value(&Value::Bool(true)).unwrap(),
-            Type::Bool,
-        );
+        assert_eq!(infer_value(&Value::Bool(true)).unwrap(), Type::Bool,);
     }
 
     #[test]
     fn literal_int32_infers_int32() {
-        assert_eq!(
-            infer_value(&Value::Int32(42_i32)).unwrap(),
-            Type::Int32,
-        );
+        assert_eq!(infer_value(&Value::Int32(42_i32)).unwrap(), Type::Int32,);
     }
 
     #[test]
@@ -512,8 +495,7 @@ mod tests {
     #[test]
     fn unknown_attr_reported() {
         let s = two_attr_schema();
-        let err = infer(&Expression::Attr(attr("missing")), &s)
-            .unwrap_err();
+        let err = infer(&Expression::Attr(attr("missing")), &s).unwrap_err();
         let InferError::UnknownAttribute(name) = err else {
             unreachable!();
         };
@@ -580,7 +562,10 @@ mod tests {
         );
         assert!(matches!(
             infer(&expr, &s).unwrap_err(),
-            InferError::TypeMismatch { expected: Type::Bool, .. },
+            InferError::TypeMismatch {
+                expected: Type::Bool,
+                ..
+            },
         ));
     }
 
@@ -589,20 +574,14 @@ mod tests {
     #[test]
     fn neg_admits_numeric() {
         let s = two_attr_schema();
-        let expr = Expression::UnOp(
-            UnOp::Neg,
-            Box::new(Expression::Attr(attr("age"))),
-        );
+        let expr = Expression::UnOp(UnOp::Neg, Box::new(Expression::Attr(attr("age"))));
         assert_eq!(infer(&expr, &s).unwrap(), Type::Int32);
     }
 
     #[test]
     fn not_admits_bool() {
         let s = two_attr_schema();
-        let expr = Expression::UnOp(
-            UnOp::Not,
-            Box::new(Expression::Lit(Value::Bool(true))),
-        );
+        let expr = Expression::UnOp(UnOp::Not, Box::new(Expression::Lit(Value::Bool(true))));
         assert_eq!(infer(&expr, &s).unwrap(), Type::Bool);
     }
 
@@ -613,32 +592,25 @@ mod tests {
         use crate::identifier::Pattern;
         let s = two_attr_schema();
         let pat = Pattern::try_new("Mr.%".to_string()).unwrap();
-        let expr =
-            Expression::Like(Box::new(Expression::Attr(attr("name"))), pat);
+        let expr = Expression::Like(Box::new(Expression::Attr(attr("name"))), pat);
         assert_eq!(infer(&expr, &s).unwrap(), Type::Bool);
     }
 
     #[test]
     fn isnull_returns_bool() {
         let s = two_attr_schema();
-        let expr =
-            Expression::IsNull(Box::new(Expression::Attr(attr("age"))));
+        let expr = Expression::IsNull(Box::new(Expression::Attr(attr("age"))));
         assert_eq!(infer(&expr, &s).unwrap(), Type::Bool);
     }
 
     #[test]
     fn cast_returns_target_type() {
         let s = two_attr_schema();
-        let expr = Expression::Cast(
-            Box::new(Expression::Attr(attr("age"))),
-            Type::Int64,
-        );
+        let expr = Expression::Cast(Box::new(Expression::Attr(attr("age"))), Type::Int64);
         assert_eq!(infer(&expr, &s).unwrap(), Type::Int64);
     }
 
-    fn in_list(
-        values: alloc::vec::Vec<Value>,
-    ) -> crate::expression::InListValues {
+    fn in_list(values: alloc::vec::Vec<Value>) -> crate::expression::InListValues {
         crate::expression::InListValues::try_new(values).unwrap()
     }
 
@@ -670,37 +642,25 @@ mod tests {
     #[test]
     fn count_is_int64() {
         let s = two_attr_schema();
-        assert_eq!(
-            agg_ty(&Agg::Count(None), &s).unwrap(),
-            Type::Int64,
-        );
+        assert_eq!(agg_ty(&Agg::Count(None), &s).unwrap(), Type::Int64,);
     }
 
     #[test]
     fn sum_widens_int32_to_int64() {
         let s = two_attr_schema();
-        assert_eq!(
-            agg_ty(&Agg::Sum(attr("age")), &s).unwrap(),
-            Type::Int64,
-        );
+        assert_eq!(agg_ty(&Agg::Sum(attr("age")), &s).unwrap(), Type::Int64,);
     }
 
     #[test]
     fn avg_returns_float64_for_int_input() {
         let s = two_attr_schema();
-        assert_eq!(
-            agg_ty(&Agg::Avg(attr("age")), &s).unwrap(),
-            Type::Float64,
-        );
+        assert_eq!(agg_ty(&Agg::Avg(attr("age")), &s).unwrap(), Type::Float64,);
     }
 
     #[test]
     fn min_returns_input_type() {
         let s = two_attr_schema();
-        assert_eq!(
-            agg_ty(&Agg::Min(attr("name")), &s).unwrap(),
-            Type::String,
-        );
+        assert_eq!(agg_ty(&Agg::Min(attr("name")), &s).unwrap(), Type::String,);
     }
 
     #[test]

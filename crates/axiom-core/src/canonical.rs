@@ -13,9 +13,7 @@ use alloc::vec::Vec;
 
 use thiserror::Error;
 
-use crate::expression::{
-    contains_aggregate, BoolExpression, Expression,
-};
+use crate::expression::{BoolExpression, Expression, contains_aggregate};
 use crate::identifier::AttributeName;
 use crate::infer::InferError;
 use crate::schema::Schema;
@@ -53,15 +51,12 @@ impl CanonicalPredicate {
     ///
     /// Returns `Infer` if the expression fails Bool-typing, and
     /// `ContainsAggregate` if it contains an `Agg` sub-expression.
-    pub fn try_new(
-        schema: &Schema,
-        expr: Expression,
-    ) -> Result<Self, CanonicalPredicateError> {
+    pub fn try_new(schema: &Schema, expr: Expression) -> Result<Self, CanonicalPredicateError> {
         if contains_aggregate(&expr) {
             return Err(CanonicalPredicateError::ContainsAggregate);
         }
-        let inner = BoolExpression::try_new(schema, expr)
-            .map_err(CanonicalPredicateError::Infer)?;
+        let inner =
+            BoolExpression::try_new(schema, expr).map_err(CanonicalPredicateError::Infer)?;
         Ok(Self { inner })
     }
 
@@ -89,10 +84,7 @@ impl CanonicalPredicate {
     }
 }
 
-fn free_attrs_into(
-    expr: &Expression,
-    out: &mut BTreeSet<AttributeName>,
-) {
+fn free_attrs_into(expr: &Expression, out: &mut BTreeSet<AttributeName>) {
     match expr {
         Expression::Attr(name) => {
             out.insert(name.clone());
@@ -120,22 +112,22 @@ fn free_attrs_into(
     }
 }
 
-fn aggregate_attribute_names(
-    agg: &crate::op_enums::Agg,
-) -> Vec<AttributeName> {
+fn aggregate_attribute_names(agg: &crate::op_enums::Agg) -> Vec<AttributeName> {
     use crate::op_enums::Agg;
     match agg {
         Agg::Count(maybe) => maybe.iter().cloned().collect(),
-        Agg::Sum(name)
-        | Agg::Min(name)
-        | Agg::Max(name)
-        | Agg::Avg(name) => alloc::vec![name.clone()],
+        Agg::Sum(name) | Agg::Min(name) | Agg::Max(name) | Agg::Avg(name) => {
+            alloc::vec![name.clone()]
+        }
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::boxed::Box;
     use alloc::string::ToString;
@@ -156,21 +148,30 @@ mod tests {
 
     fn person_schema() -> Schema {
         Schema::try_new(vec![
-            Attribute { name: attr("age"), ty: Type::Int32 },
-            Attribute { name: attr("retire_at"), ty: Type::Int32 },
-            Attribute { name: attr("amount"), ty: Type::Int32 },
-            Attribute { name: attr("x"), ty: Type::Int32 },
+            Attribute {
+                name: attr("age"),
+                ty: Type::Int32,
+            },
+            Attribute {
+                name: attr("retire_at"),
+                ty: Type::Int32,
+            },
+            Attribute {
+                name: attr("amount"),
+                ty: Type::Int32,
+            },
+            Attribute {
+                name: attr("x"),
+                ty: Type::Int32,
+            },
         ])
         .unwrap()
     }
 
     #[test]
     fn literal_predicate_admissible() {
-        let p = CanonicalPredicate::try_new(
-            &person_schema(),
-            Expression::Lit(Value::Bool(true)),
-        )
-        .unwrap();
+        let p = CanonicalPredicate::try_new(&person_schema(), Expression::Lit(Value::Bool(true)))
+            .unwrap();
         let Expression::Lit(Value::Bool(true)) = p.as_expression() else {
             unreachable!();
         };
@@ -188,10 +189,8 @@ mod tests {
 
     #[test]
     fn non_bool_expression_rejected() {
-        let result = CanonicalPredicate::try_new(
-            &person_schema(),
-            Expression::Lit(Value::Int32(0)),
-        );
+        let result =
+            CanonicalPredicate::try_new(&person_schema(), Expression::Lit(Value::Int32(0)));
         assert!(matches!(
             result.unwrap_err(),
             CanonicalPredicateError::Infer(InferError::TypeMismatch {

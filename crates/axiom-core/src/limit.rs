@@ -4,7 +4,7 @@
 //! rule keyed off a constant in `crate::limits`.
 
 use whittle::primitive::{NumericError, Within};
-use whittle::{refinement, Refined};
+use whittle::{Refined, refinement};
 
 use crate::limits::{MAX_LIMIT_COUNT, MAX_OFFSET, MAX_PATH_INDEX};
 
@@ -63,8 +63,7 @@ impl LimitCount {
     pub fn zero() -> Self {
         // SAFETY by rule: 0 is in 0..=MAX_LIMIT_COUNT for every
         // sensible value of MAX_LIMIT_COUNT.
-        Self::bounded(0)
-            .unwrap_or_else(|_| -> Self { unreachable!() })
+        Self::bounded(0).unwrap_or_else(|_| -> Self { unreachable!() })
     }
 
     /// Borrow the inner count, returning `None` for `Unbounded`.
@@ -99,8 +98,11 @@ impl BoundedIndex {
 pub type BoundedIndexError = NumericError;
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use whittle::primitive::NumericError;
 

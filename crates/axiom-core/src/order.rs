@@ -61,10 +61,8 @@ impl KeyOf<OrderKey> for OrderKeyAttrKey {
     }
 }
 
-type OrderKeysRule = And<
-    LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>,
-    UniqueByKey<OrderKey, OrderKeyAttrKey>,
->;
+type OrderKeysRule =
+    And<LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>, UniqueByKey<OrderKey, OrderKeyAttrKey>>;
 
 /// Bounded, attr-unique list of order keys.
 ///
@@ -108,19 +106,11 @@ impl OrderKeys {
     /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateKey` if two keys
     /// share an attribute name.
     #[inline]
-    pub fn try_new(
-        keys: Vec<OrderKey>,
-    ) -> Result<Self, OrderKeysError> {
+    pub fn try_new(keys: Vec<OrderKey>) -> Result<Self, OrderKeysError> {
         Refined::try_new(keys).map(Self).map_err(|err| match err {
-            CollectionError::LenOutOfRange { actual } => {
-                OrderKeysError::KeyCount { actual }
-            }
-            CollectionError::DuplicateKey { index } => {
-                OrderKeysError::DuplicateKey { index }
-            }
-            _ => unreachable!(
-                "OrderKeysRule emits only LenOutOfRange / DuplicateKey"
-            ),
+            CollectionError::LenOutOfRange { actual } => OrderKeysError::KeyCount { actual },
+            CollectionError::DuplicateKey { index } => OrderKeysError::DuplicateKey { index },
+            _ => unreachable!("OrderKeysRule emits only LenOutOfRange / DuplicateKey"),
         })
     }
 
@@ -140,16 +130,17 @@ impl OrderKeys {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::string::ToString;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::{
-        Direction, NullOrder, OrderKey, OrderKeys, OrderKeysError,
-    };
+    use super::{Direction, NullOrder, OrderKey, OrderKeys, OrderKeysError};
     use crate::identifier::AttributeName;
     use crate::limits::MAX_SCHEMA_ATTRIBUTES;
 
@@ -170,10 +161,7 @@ mod tests {
     #[test]
     fn empty_keys_rejected() {
         let result = OrderKeys::try_new(Vec::new());
-        assert_eq!(
-            result.unwrap_err(),
-            OrderKeysError::KeyCount { actual: 0 },
-        );
+        assert_eq!(result.unwrap_err(), OrderKeysError::KeyCount { actual: 0 },);
     }
 
     #[test]

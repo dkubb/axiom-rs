@@ -7,9 +7,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use whittle::primitive::{
-    CollectionError, KeyOf, LenItems, UniqueByKey,
-};
+use whittle::primitive::{CollectionError, KeyOf, LenItems, UniqueByKey};
 use whittle::{And, Refined};
 
 use crate::expression::Predicate;
@@ -42,10 +40,8 @@ impl KeyOf<EquiPair> for EquiPairLeftKey {
 // left-side names unique. Right-side duplicates are admitted (the
 // same right-side column may be equated to multiple left-side
 // columns in conjunction).
-type EquiPairsRule = And<
-    LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>,
-    UniqueByKey<EquiPair, EquiPairLeftKey>,
->;
+type EquiPairsRule =
+    And<LenItems<1, { MAX_SCHEMA_ATTRIBUTES }>, UniqueByKey<EquiPair, EquiPairLeftKey>>;
 
 /// Bounded equi-join pair set.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,19 +79,13 @@ impl EquiPairs {
     /// `1..=MAX_SCHEMA_ATTRIBUTES`, or `DuplicateLeftAttribute` if
     /// two pairs share a left-side attribute.
     #[inline]
-    pub fn try_new(
-        pairs: Vec<EquiPair>,
-    ) -> Result<Self, EquiPairsError> {
+    pub fn try_new(pairs: Vec<EquiPair>) -> Result<Self, EquiPairsError> {
         Refined::try_new(pairs).map(Self).map_err(|err| match err {
-            CollectionError::LenOutOfRange { actual } => {
-                EquiPairsError::PairCount { actual }
-            }
+            CollectionError::LenOutOfRange { actual } => EquiPairsError::PairCount { actual },
             CollectionError::DuplicateKey { index } => {
                 EquiPairsError::DuplicateLeftAttribute { index }
             }
-            _ => unreachable!(
-                "EquiPairsRule emits only LenOutOfRange / DuplicateKey"
-            ),
+            _ => unreachable!("EquiPairsRule emits only LenOutOfRange / DuplicateKey"),
         })
     }
 
@@ -129,10 +119,12 @@ pub enum JoinOn {
     Theta(Predicate),
 }
 
-
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used,
-        reason = "explicit in test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "explicit in test code"
+)]
 mod tests {
     use alloc::string::ToString;
     use alloc::vec;
@@ -154,29 +146,20 @@ mod tests {
 
     #[test]
     fn equi_pairs_admit_distinct_left_keys() {
-        let pairs = EquiPairs::try_new(vec![
-            pair("user_id", "id"),
-            pair("order_id", "id"),
-        ])
-        .unwrap();
+        let pairs =
+            EquiPairs::try_new(vec![pair("user_id", "id"), pair("order_id", "id")]).unwrap();
         assert_eq!(pairs.as_slice().len(), 2);
     }
 
     #[test]
     fn equi_pairs_reject_empty() {
         let result = EquiPairs::try_new(Vec::new());
-        assert_eq!(
-            result.unwrap_err(),
-            EquiPairsError::PairCount { actual: 0 },
-        );
+        assert_eq!(result.unwrap_err(), EquiPairsError::PairCount { actual: 0 },);
     }
 
     #[test]
     fn equi_pairs_reject_duplicate_left_key() {
-        let result = EquiPairs::try_new(vec![
-            pair("user_id", "a"),
-            pair("user_id", "b"),
-        ]);
+        let result = EquiPairs::try_new(vec![pair("user_id", "a"), pair("user_id", "b")]);
         assert_eq!(
             result.unwrap_err(),
             EquiPairsError::DuplicateLeftAttribute { index: 1 },
