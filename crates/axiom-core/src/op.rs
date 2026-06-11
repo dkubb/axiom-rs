@@ -44,7 +44,6 @@ pub struct AttributeSet(Refined<Vec<AttributeName>, AttributeSetRule>);
 /// `CollectionError`, so the composition's error is `CollectionError`
 /// directly — no positional `Left` / `Right` wrapping leaks.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum AttributeSetError {
     /// Attribute count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
     #[error("attribute-set count out of range (actual: {actual})")]
@@ -79,7 +78,12 @@ impl AttributeSet {
             CollectionError::DuplicateKey { index } => {
                 AttributeSetError::DuplicateAttribute { index }
             }
-            _ => unreachable!("AttributeSetRule emits only LenOutOfRange / DuplicateKey"),
+            CollectionError::BadItem { .. }
+            | CollectionError::MatchingItem { .. }
+            | CollectionError::NoMatchingItem
+            | CollectionError::NotSorted { .. } => {
+                unreachable!("AttributeSetRule emits only LenOutOfRange / DuplicateKey")
+            }
         })
     }
 
@@ -115,7 +119,6 @@ pub struct GroupingSet(Refined<Vec<AttributeName>, GroupingSetRule>);
 /// empty set is admissible here; `GroupCount` still fires when the
 /// list exceeds `MAX_SCHEMA_ATTRIBUTES`).
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum GroupingSetError {
     /// Grouping-key count fell outside `0..=MAX_SCHEMA_ATTRIBUTES`.
     #[error("grouping-set count out of range (actual: {actual})")]
@@ -148,7 +151,12 @@ impl GroupingSet {
             CollectionError::DuplicateKey { index } => {
                 GroupingSetError::DuplicateAttribute { index }
             }
-            _ => unreachable!("GroupingSetRule emits only LenOutOfRange / DuplicateKey"),
+            CollectionError::BadItem { .. }
+            | CollectionError::MatchingItem { .. }
+            | CollectionError::NoMatchingItem
+            | CollectionError::NotSorted { .. } => {
+                unreachable!("GroupingSetRule emits only LenOutOfRange / DuplicateKey")
+            }
         })
     }
 
@@ -193,7 +201,6 @@ pub struct NamedAggSet(Refined<Vec<NamedAgg>, NamedAggSetRule>);
 /// output attribute name, so a duplicate is reported as
 /// `DuplicateOutputName`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum NamedAggSetError {
     /// Aggregate count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
     #[error("named-aggregate count out of range (actual: {actual})")]
@@ -228,7 +235,12 @@ impl NamedAggSet {
             CollectionError::DuplicateKey { index } => {
                 NamedAggSetError::DuplicateOutputName { index }
             }
-            _ => unreachable!("NamedAggSetRule emits only LenOutOfRange / DuplicateKey"),
+            CollectionError::BadItem { .. }
+            | CollectionError::MatchingItem { .. }
+            | CollectionError::NoMatchingItem
+            | CollectionError::NotSorted { .. } => {
+                unreachable!("NamedAggSetRule emits only LenOutOfRange / DuplicateKey")
+            }
         })
     }
 
@@ -265,7 +277,6 @@ pub struct Op {
 
 /// Errors common to every schema-aware `Op` smart constructor.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum OpError {
     /// A referenced attribute is not in the input schema.
     #[error("attribute `{attribute}` is not in the input schema")]

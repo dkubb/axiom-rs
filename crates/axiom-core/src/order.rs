@@ -79,7 +79,6 @@ pub struct OrderKeys(Refined<Vec<OrderKey>, OrderKeysRule>);
 /// `CollectionError`, so the composition's error is `CollectionError`
 /// directly — no positional `Left` / `Right` wrapping leaks.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum OrderKeysError {
     /// Key count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
     #[error("order-key count out of range (actual: {actual})")]
@@ -110,7 +109,12 @@ impl OrderKeys {
         Refined::try_new(keys).map(Self).map_err(|err| match err {
             CollectionError::LenOutOfRange { actual } => OrderKeysError::KeyCount { actual },
             CollectionError::DuplicateKey { index } => OrderKeysError::DuplicateKey { index },
-            _ => unreachable!("OrderKeysRule emits only LenOutOfRange / DuplicateKey"),
+            CollectionError::BadItem { .. }
+            | CollectionError::MatchingItem { .. }
+            | CollectionError::NoMatchingItem
+            | CollectionError::NotSorted { .. } => {
+                unreachable!("OrderKeysRule emits only LenOutOfRange / DuplicateKey")
+            }
         })
     }
 

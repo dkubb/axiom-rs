@@ -42,7 +42,6 @@ pub struct InListValues(Refined<Vec<Value>, InListValuesRule>);
 /// variant gives call sites a domain-named match target without
 /// having to thread `CollectionError` through.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum InListValuesError {
     /// Value count fell outside `1..=MAX_IN_LIST`.
     #[error("in-list value count out of range (actual: {actual})")]
@@ -63,7 +62,13 @@ impl InListValues {
     pub fn try_new(values: Vec<Value>) -> Result<Self, InListValuesError> {
         Refined::try_new(values).map(Self).map_err(|err| match err {
             CollectionError::LenOutOfRange { actual } => InListValuesError::ValueCount { actual },
-            _ => unreachable!("InListValuesRule (LenItems) emits only LenOutOfRange"),
+            CollectionError::BadItem { .. }
+            | CollectionError::DuplicateKey { .. }
+            | CollectionError::MatchingItem { .. }
+            | CollectionError::NoMatchingItem
+            | CollectionError::NotSorted { .. } => {
+                unreachable!("InListValuesRule (LenItems) emits only LenOutOfRange")
+            }
         })
     }
 

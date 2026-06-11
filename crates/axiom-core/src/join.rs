@@ -52,7 +52,6 @@ pub struct EquiPairs(Refined<Vec<EquiPair>, EquiPairsRule>);
 /// Flat domain-shaped enum: the underlying composition is
 /// `And<LenItems, UniqueByKey>` keyed on the left attribute name.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum EquiPairsError {
     /// Pair count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
     #[error("equi-pair count out of range (actual: {actual})")]
@@ -85,7 +84,12 @@ impl EquiPairs {
             CollectionError::DuplicateKey { index } => {
                 EquiPairsError::DuplicateLeftAttribute { index }
             }
-            _ => unreachable!("EquiPairsRule emits only LenOutOfRange / DuplicateKey"),
+            CollectionError::BadItem { .. }
+            | CollectionError::MatchingItem { .. }
+            | CollectionError::NoMatchingItem
+            | CollectionError::NotSorted { .. } => {
+                unreachable!("EquiPairsRule emits only LenOutOfRange / DuplicateKey")
+            }
         })
     }
 

@@ -32,7 +32,6 @@ pub struct CanonicalPredicate {
 
 /// Construction error for `CanonicalPredicate`.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum CanonicalPredicateError {
     /// Expression failed Bool-typing against the schema.
     #[error("{0}")]

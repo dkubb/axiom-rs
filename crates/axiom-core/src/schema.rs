@@ -66,7 +66,6 @@ pub struct Schema(Refined<Vec<Attribute>, SchemaHeaderRule>);
 /// directly — call sites match on `Cardinality` or
 /// `DuplicateAttribute` here without seeing the rule shape.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum SchemaError {
     /// Attribute count fell outside `1..=MAX_SCHEMA_ATTRIBUTES`.
     #[error("schema cardinality out of range (actual: {actual})")]
@@ -102,9 +101,14 @@ impl Schema {
                     SchemaError::DuplicateAttribute { index }
                 }
                 // The underlying composition only produces the two
-                // variants matched above; other `CollectionError`
+                // variants matched above; the remaining `CollectionError`
                 // variants belong to rules not used here.
-                _ => unreachable!("SchemaHeaderRule emits only LenOutOfRange / DuplicateKey"),
+                CollectionError::BadItem { .. }
+                | CollectionError::MatchingItem { .. }
+                | CollectionError::NoMatchingItem
+                | CollectionError::NotSorted { .. } => {
+                    unreachable!("SchemaHeaderRule emits only LenOutOfRange / DuplicateKey")
+                }
             })
     }
 

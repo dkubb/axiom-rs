@@ -73,7 +73,6 @@ pub struct MemorySource {
 
 /// Constructor error for `MemorySource`.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum MemorySourceError {
     /// `Rows` length bound failed.
     #[error("rows: {0}")]

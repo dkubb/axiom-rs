@@ -34,7 +34,6 @@ pub struct AttributeConstraint {
 
 /// Construction error for `AttributeConstraint`.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum AttributeConstraintError {
     /// Predicate mentions an attribute other than the scoped one.
     #[error("attribute constraint on `{scope}` referenced foreign attribute `{foreign}`")]
@@ -170,7 +169,6 @@ pub struct ConstraintSet {
 
 /// Constructor error for `ConstraintSet`.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ConstraintSetError {
     /// Per-attribute constraint vector violated its length bound.
     #[error("per-attribute constraint list: length: {0}")]
@@ -195,7 +193,12 @@ impl From<CollectionError> for ConstraintSetError {
         match err {
             CollectionError::LenOutOfRange { .. } => Self::PerAttributeLength(err),
             CollectionError::DuplicateKey { .. } => Self::PerAttributeDuplicate(err),
-            _ => unreachable!("AttrConstraintsRule emits only LenOutOfRange / DuplicateKey"),
+            CollectionError::BadItem { .. }
+            | CollectionError::MatchingItem { .. }
+            | CollectionError::NoMatchingItem
+            | CollectionError::NotSorted { .. } => {
+                unreachable!("AttrConstraintsRule emits only LenOutOfRange / DuplicateKey")
+            }
         }
     }
 }

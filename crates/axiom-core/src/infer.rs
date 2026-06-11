@@ -24,7 +24,6 @@ use crate::ty::{Type, Value};
 /// reports the inferred operand types so call sites can produce
 /// useful diagnostics without re-traversing the AST.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum InferError {
     /// `Attr(name)` referenced an attribute that is not in the
     /// schema.
@@ -142,7 +141,6 @@ pub fn infer(expr: &Expression, schema: &Schema) -> Result<Type, InferError> {
 /// inside the value tree so callers can produce precise
 /// diagnostics.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ValueTypeError {
     /// Scalar mismatch (or compound-value-vs-scalar-type) at the
     /// current node.

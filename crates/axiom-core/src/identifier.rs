@@ -56,7 +56,6 @@ pub struct AttributeName(Refined<String, AttributeNameRule>);
 /// The three branches map to three flat variants so call sites do
 /// not see the rule shape at all.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum AttributeNameError {
     /// Length (in characters) fell outside
     /// `1..=MAX_ATTRIBUTE_NAME_LEN`.
@@ -93,7 +92,9 @@ impl AttributeName {
             StringError::CharCountOutOfRange { actual } => AttributeNameError::Length { actual },
             StringError::BadChar { offset } => AttributeNameError::BodyChar { offset },
             StringError::BadFirstChar => AttributeNameError::FirstChar,
-            _ => unreachable!(
+            StringError::ByteLenOutOfRange { .. }
+            | StringError::Empty
+            | StringError::BadHexLength { .. } => unreachable!(
                 "AttributeNameRule emits only CharCountOutOfRange / BadChar / BadFirstChar"
             ),
         })
@@ -132,7 +133,6 @@ pub struct TableName(Refined<String, TableNameRule>);
 /// mode is a length-bound violation. The flat variant gives call
 /// sites a domain-named match target.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum TableNameError {
     /// Length (in characters) fell outside `1..=MAX_TABLE_NAME_LEN`.
     #[error("table-name length out of range (actual: {actual})")]
@@ -153,7 +153,13 @@ impl TableName {
     pub fn try_new(raw: String) -> Result<Self, TableNameError> {
         Refined::try_new(raw).map(Self).map_err(|err| match err {
             StringError::CharCountOutOfRange { actual } => TableNameError::Length { actual },
-            _ => unreachable!("TableNameRule (LenChars) emits only CharCountOutOfRange"),
+            StringError::ByteLenOutOfRange { .. }
+            | StringError::Empty
+            | StringError::BadChar { .. }
+            | StringError::BadFirstChar
+            | StringError::BadHexLength { .. } => {
+                unreachable!("TableNameRule (LenChars) emits only CharCountOutOfRange")
+            }
         })
     }
 
@@ -183,7 +189,6 @@ pub struct Pattern(Refined<String, PatternRule>);
 /// The underlying rule is a single `LenChars`, so the only failure
 /// mode is a length-bound violation.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum PatternError {
     /// Length (in characters) fell outside `1..=MAX_PATTERN_LEN`.
     #[error("pattern length out of range (actual: {actual})")]
@@ -204,7 +209,13 @@ impl Pattern {
     pub fn try_new(raw: String) -> Result<Self, PatternError> {
         Refined::try_new(raw).map(Self).map_err(|err| match err {
             StringError::CharCountOutOfRange { actual } => PatternError::Length { actual },
-            _ => unreachable!("PatternRule (LenChars) emits only CharCountOutOfRange"),
+            StringError::ByteLenOutOfRange { .. }
+            | StringError::Empty
+            | StringError::BadChar { .. }
+            | StringError::BadFirstChar
+            | StringError::BadHexLength { .. } => {
+                unreachable!("PatternRule (LenChars) emits only CharCountOutOfRange")
+            }
         })
     }
 
